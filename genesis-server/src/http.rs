@@ -181,6 +181,14 @@ fn health(app: &App) -> Response {
 
 async fn genesis(app: &App, safe: Address) -> (u16, Value, Option<u32>) {
     let l = registry::lookup(&app.config, safe).await;
+    if l.record.is_none()
+        && l.unreachable.is_empty()
+        && let Ok(Some(g)) = app.store.mailbox_genesis(safe)
+    {
+        // Not recorded yet, but proven: the record may follow; nothing is cached.
+        let (status, body) = view::genesis_pending(safe, &g);
+        return (status, body, None);
+    }
     let (status, body) = view::genesis(safe, &l);
     (status, body, cache::ttl_secs(Endpoint::Genesis, l.basis(app.config.home_chain_id)))
 }
@@ -293,6 +301,11 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
         return view::import_resolved(&task, cfg.registry, &Sponsorship::Sponsor);
     }
     let evidence = evidence(app, &task, c, req.owner_proof.as_ref()).await;
+    if matches!(evidence, Evidence::Owner(_)) {
+        // An owner proved it asks for this genesis: keep it where other
+        // devices can read it, whether or not this write is sponsored.
+        let _ = app.store.keep_mailbox_genesis(task.safe, &task.genesis);
+    }
     let sponsorship = sponsorship(app, &evidence);
     if sponsorship != Sponsorship::Sponsor {
         return view::import_resolved(&task, cfg.registry, &sponsorship);

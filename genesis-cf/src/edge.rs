@@ -182,6 +182,14 @@ impl Edge {
 
     async fn genesis(&self, safe: Address) -> Result<Answer> {
         let l = registry::lookup(&self.config, safe).await;
+        if l.record.is_none()
+            && l.unreachable.is_empty()
+            && let Some(g) = self.stored_genesis(safe).await
+        {
+            // Not recorded yet, but proven: the record may follow; nothing is cached.
+            let (status, body) = view::genesis_pending(safe, &g);
+            return Ok(Answer { status, body, ttl_secs: None });
+        }
         let (status, body) = view::genesis(safe, &l);
         Ok(Answer { status, body, ttl_secs: cache::ttl_secs(Endpoint::Genesis, l.basis(self.config.home_chain_id)) })
     }
@@ -278,6 +286,11 @@ impl Edge {
             return Ok(view::import_resolved(&task, self.config.registry, &Sponsorship::Sponsor));
         }
         let evidence = self.evidence(&task, chain, req.owner_proof.as_ref()).await;
+        if matches!(evidence, Evidence::Owner(_)) {
+            // An owner proved it asks for this genesis: keep it where other
+            // devices can read it, whether or not this write is sponsored.
+            let _: Value = self.do_post("/mailbox/genesis", &json!({"safe": task.safe, "genesis": task.genesis})).await?;
+        }
         let sponsorship = self.sponsorship(&evidence).await?;
         if sponsorship != Sponsorship::Sponsor {
             return Ok(view::import_resolved(&task, self.config.registry, &sponsorship));

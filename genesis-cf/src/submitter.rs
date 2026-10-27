@@ -131,6 +131,22 @@ impl DurableObject for SubmitterDo {
                 };
                 Response::from_json(&answer)
             }
+            "/mailbox/genesis" => {
+                #[derive(Deserialize)]
+                struct Keep {
+                    safe: genesis_rules::Address,
+                    genesis: genesis_rules::genesis::Genesis,
+                }
+                let k: Keep = req.json().await?;
+                self.sql().exec(
+                    "INSERT INTO mailbox_geneses (safe, payload) VALUES (?1, ?2) ON CONFLICT(safe) DO NOTHING",
+                    vec![
+                        SqlStorageValue::from(k.safe.to_string().to_lowercase()),
+                        SqlStorageValue::from(serde_json::to_string(&k.genesis).map_err(|e| worker::Error::RustError(e.to_string()))?),
+                    ],
+                )?;
+                Response::from_json(&json!({"kept": true}))
+            }
             "/proposal/genesis" => {
                 let rows: Vec<PayloadRow> = self
                     .sql()

@@ -172,3 +172,14 @@ pub fn proposal_refused(refusal: &ProposalRefusal) -> (u16, Value) {
 pub fn unknown_safe() -> (u16, Value) {
     error(404, "unknown Safe: it is not deployed on this chain and no genesis is recorded for it")
 }
+
+/// `GET /api/genesis/{safe}` for a genesis the mailbox holds but no registry
+/// does yet: one an owner proved it asked for (or sent with a proposal), kept
+/// only because it derives the address. `pending`: not recorded on chain yet.
+pub fn genesis_pending(safe: Address, g: &crate::genesis::Genesis) -> (u16, Value) {
+    (
+        200,
+        json!({"safe": safe, "found": true, "pending": true, "recordedOn": [], "genesis": g,
+               "setup": Setup::decode(&g.initializer)}),
+    )
+}
