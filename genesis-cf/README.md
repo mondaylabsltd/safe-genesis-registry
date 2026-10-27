@@ -139,6 +139,40 @@ and `reason` says which.
 - A key costs nothing to make, so the proof is not a cost to the caller. What it does is put these writes in their
   own lane with a per-owner quota. Replaying a proof is harmless: records are write-once.
 
+### The proposal mailbox
+
+Safe transactions waiting for their owners' approvals, for Safes deployed or
+not. The mailbox is not a source of trust — a wallet re-hashes, re-reads and
+re-verifies everything it gets — but it only takes what the chain would.
+
+`POST /api/proposals`
+
+```json
+{"chainId": 100, "safe": "0x…", "safeTx": {"to", "value", "data", "operation", "safeTxGas", "baseGas",
+ "gasPrice", "gasToken", "refundReceiver", "nonce"}, "approval": {…}, "genesis": {…}}
+```
+
+- `approval` is one owner's, by passkey: `owner`, `ownerGenesis` (it must
+  deploy to `owner`), `signer` (one of the owner wallet's passkey signers),
+  `authenticatorData`, `clientDataFields`, `r`, `s`. It must verify as the
+  owner's on-chain check would: `SafeMessage(safeTxHash)` under the owner's
+  domain, `clientDataJSON` rebuilt as the signer contract does,
+  user-verified.
+- The owners are the deployed Safe's on that chain, or what its genesis
+  creates there. `genesis` is optional: a Safe whose record has not landed
+  yet is known by it, if it derives the address.
+- `201 {"status": "created", "proposal"}` · `200 {"status": "approved" | "unchanged", "proposal"}` ·
+  `422 {"refusal"}` (`transaction`, `approval` with the reason, `full`) ·
+  `404` for a Safe nobody can say the owners of.
+
+`GET /api/proposals/{safe}?chainId=` — the Safe's proposals on that chain
+(changed in the last 30 days, by nonce) and `members`: `deployed`, `owners`,
+`threshold`, `nonce`. `GET /api/proposals/{safe}/{safeTxHash}?chainId=` — one.
+
+A genesis an owner proved (`ownerProof`) or sent with a proposal is kept, and
+`GET /api/genesis/{safe}` answers it as `"pending": true` (never cached) until
+a registry holds the record.
+
 ### Caching
 
 Responses carry `x-cache: hit | miss`. A found genesis is cached for an hour
