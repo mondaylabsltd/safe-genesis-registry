@@ -76,6 +76,10 @@ pub struct Task {
     pub error: Option<String>,
     pub created_ms: u64,
     pub updated_ms: u64,
+    /// The owner whose proof got this task sponsored ([`Lane::Owner`]);
+    /// `None` for a Safe deployed somewhere ([`Lane::Deployed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proved_by: Option<Address>,
 }
 
 impl Task {
@@ -153,6 +157,7 @@ pub fn admit(
         error: None,
         created_ms: now_ms,
         updated_ms: now_ms,
+        proved_by: None,
     })
 }
 
@@ -236,14 +241,72 @@ pub fn next(task: &Task, obs: Observation, now_ms: u64) -> Action {
 // Who pays
 // ---------------------------------------------------------------------------
 
-/// How many sponsored writes the service makes.
+/// How many sponsored writes one lane makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
     pub per_minute: u32,
     pub per_day: u32,
 }
 
+/// Safes deployed on some chain.
 pub const DEFAULT_BUDGET: Budget = Budget { per_minute: 20, per_day: 500 };
+/// Safes deployed nowhere yet, asked for by a proven owner.
+pub const OWNER_LANE_BUDGET: Budget = Budget { per_minute: 10, per_day: 300 };
+/// Owner-lane writes one owner may ask for per day.
+pub const PER_OWNER_PER_DAY: u32 = 5;
+
+/// The two lanes keep separate counts, so a flood in one cannot spend the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lane {
+    Deployed,
+    Owner,
+}
+
+/// Why the service might pay for a write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Evidence {
+    /// The Safe exists on some chain: its creator paid for a deployment.
+    Deployed,
+    /// An owner proved it asks for the record ([`crate::owner_proof`]).
+    Owner(Address),
+    /// Neither; `reason` says why not.
+    Nothing { reason: String },
+}
+
+impl Evidence {
+    /// Deployment first: a proof is only needed, and only checked, for a
+    /// Safe that exists nowhere.
+    pub fn assess(deployed_somewhere: bool, proof: Option<Result<Address, crate::owner_proof::ProofError>>) -> Self {
+        match (deployed_somewhere, proof) {
+            (true, _) => Self::Deployed,
+            (false, Some(Ok(owner))) => Self::Owner(owner),
+            (false, Some(Err(e))) => {
+                Self::Nothing { reason: format!("the Safe exists on no chain yet and the owner proof was refused: {e}") }
+            }
+            (false, None) => Self::Nothing {
+                reason: "the Safe exists on no chain yet; send an ownerProof, or record it with recordCall".into(),
+            },
+        }
+    }
+
+    /// The lane whose counts decide, and the owner whose quota applies.
+    pub fn lane(&self) -> Option<(Lane, Option<Address>)> {
+        match self {
+            Self::Deployed => Some((Lane::Deployed, None)),
+            Self::Owner(o) => Some((Lane::Owner, Some(*o))),
+            Self::Nothing { .. } => None,
+        }
+    }
+}
+
+/// Sponsored writes already made: in the lane over the last minute and day,
+/// and for the owner (owner lane only) over the last day.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub minute: u32,
+    pub day: u32,
+    pub owner_day: u32,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -253,20 +316,20 @@ pub enum Sponsorship {
     CallerPays { reason: String },
 }
 
-/// Sponsor only Safes that exist on some chain — each one cost its creator a
-/// deployment, so spam costs the spammer as much as it costs the sponsor — and
-/// only within the budget. A Safe that exists nowhere yet is recorded by
-/// whoever holds its parameters (a wallet does it in the creation batch).
-pub fn sponsorship(deployed_somewhere: bool, last_minute: u32, last_day: u32, budget: Budget) -> Sponsorship {
-    if !deployed_somewhere {
-        return Sponsorship::CallerPays {
-            reason: "the Safe exists on no chain yet; record it with recordCall (or in its creation batch)".into(),
-        };
+/// Sponsor a Safe that exists on some chain — each one cost its creator a
+/// deployment — or one deployed nowhere yet whose owner proved it asks, each
+/// lane within its own budget and the owner lane within a per-owner quota.
+/// Anything else is recorded by whoever holds its parameters.
+pub fn sponsorship(evidence: &Evidence, usage: Usage) -> Sponsorship {
+    let spent = |what: &str| Sponsorship::CallerPays { reason: format!("{what} is spent for now; send recordCall") };
+    let over = |b: Budget| usage.minute >= b.per_minute || usage.day >= b.per_day;
+    match evidence {
+        Evidence::Nothing { reason } => Sponsorship::CallerPays { reason: reason.clone() },
+        Evidence::Deployed if over(DEFAULT_BUDGET) => spent("the sponsorship budget"),
+        Evidence::Owner(_) if over(OWNER_LANE_BUDGET) => spent("the budget for Safes deployed nowhere yet"),
+        Evidence::Owner(_) if usage.owner_day >= PER_OWNER_PER_DAY => spent("this owner's daily quota"),
+        Evidence::Deployed | Evidence::Owner(_) => Sponsorship::Sponsor,
     }
-    if last_minute >= budget.per_minute || last_day >= budget.per_day {
-        return Sponsorship::CallerPays { reason: "the sponsorship budget is spent for now; send recordCall".into() };
-    }
-    Sponsorship::Sponsor
 }
 
 #[cfg(test)]
@@ -365,9 +428,26 @@ mod tests {
 
     #[test]
     fn sponsorship_policy() {
-        assert_eq!(sponsorship(true, 0, 0, DEFAULT_BUDGET), Sponsorship::Sponsor);
-        assert!(matches!(sponsorship(false, 0, 0, DEFAULT_BUDGET), Sponsorship::CallerPays { .. }));
-        assert!(matches!(sponsorship(true, DEFAULT_BUDGET.per_minute, 0, DEFAULT_BUDGET), Sponsorship::CallerPays { .. }));
-        assert!(matches!(sponsorship(true, 0, DEFAULT_BUDGET.per_day, DEFAULT_BUDGET), Sponsorship::CallerPays { .. }));
+        let owner = Address::repeat_byte(7);
+        let u = |minute, day, owner_day| Usage { minute, day, owner_day };
+        let pays = |s: Sponsorship| matches!(s, Sponsorship::CallerPays { .. });
+        assert_eq!(sponsorship(&Evidence::Deployed, u(0, 0, 0)), Sponsorship::Sponsor);
+        assert!(pays(sponsorship(&Evidence::Deployed, u(DEFAULT_BUDGET.per_minute, 0, 0))));
+        assert!(pays(sponsorship(&Evidence::Deployed, u(0, DEFAULT_BUDGET.per_day, 0))));
+        assert_eq!(sponsorship(&Evidence::Owner(owner), u(0, 0, PER_OWNER_PER_DAY - 1)), Sponsorship::Sponsor);
+        assert!(pays(sponsorship(&Evidence::Owner(owner), u(0, 0, PER_OWNER_PER_DAY))));
+        assert!(pays(sponsorship(&Evidence::Owner(owner), u(OWNER_LANE_BUDGET.per_minute, 0, 0))));
+        assert!(pays(sponsorship(&Evidence::Owner(owner), u(0, OWNER_LANE_BUDGET.per_day, 0))));
+        assert!(pays(sponsorship(&Evidence::assess(false, None), u(0, 0, 0))));
+    }
+
+    #[test]
+    fn deployment_outranks_a_proof() {
+        let refused = Err(crate::owner_proof::ProofError::NoKeyMatches);
+        assert_eq!(Evidence::assess(true, Some(refused.clone())), Evidence::Deployed);
+        assert_eq!(Evidence::assess(true, None).lane(), Some((Lane::Deployed, None)));
+        assert!(matches!(Evidence::assess(false, Some(refused)), Evidence::Nothing { .. }));
+        let owner = Address::repeat_byte(7);
+        assert_eq!(Evidence::assess(false, Some(Ok(owner))).lane(), Some((Lane::Owner, Some(owner))));
     }
 }

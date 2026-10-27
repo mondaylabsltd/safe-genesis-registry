@@ -15,6 +15,8 @@
 //! - [`known`] — the contracts a creation may depend on, with the code each
 //!   must have on a chain and the kind of contract each is.
 //! - [`passkey`] — where Safe's passkey signer factory puts a signer.
+//! - [`owner_proof`] — an owner's passkey asking for a Safe deployed nowhere
+//!   yet to be recorded: what the service needs to sponsor it.
 //! - [`replay`] — whether replaying a genesis on a given chain recreates the
 //!   same wallet: the dependencies it touches and the verdict.
 //! - [`drift`] — a Safe's original members against its current ones.
@@ -36,6 +38,7 @@ pub mod genesis;
 pub mod import;
 pub mod known;
 pub mod lookup;
+pub mod owner_proof;
 pub mod passkey;
 pub mod replay;
 pub mod resolve;

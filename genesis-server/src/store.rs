@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use genesis_rules::import::Task;
+use genesis_rules::Address;
+use genesis_rules::import::{Lane, Task};
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub struct Store {
@@ -24,7 +25,8 @@ impl Store {
                  status  TEXT NOT NULL,
                  created INTEGER NOT NULL,
                  updated INTEGER NOT NULL,
-                 payload TEXT NOT NULL
+                 payload TEXT NOT NULL,
+                 proved_by TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_tasks_safe ON tasks (safe);
              CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks (status, updated);
@@ -32,6 +34,12 @@ impl Store {
              CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, sent_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
         )?;
+        // Tables made before the owner lane existed lack its column.
+        let has: i64 =
+            conn.query_row("SELECT count(*) FROM pragma_table_info('tasks') WHERE name = 'proved_by'", [], |r| r.get(0))?;
+        if has == 0 {
+            conn.execute("ALTER TABLE tasks ADD COLUMN proved_by TEXT", [])?;
+        }
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -63,10 +71,16 @@ impl Store {
         })
     }
 
-    /// Tasks created since `ms` (every task is a sponsored write).
-    pub fn sponsored_since(&self, ms: i64) -> R<u32> {
-        self.with(|c| c.query_row("SELECT count(*) FROM tasks WHERE created >= ?1", params![ms], |r| r.get::<_, i64>(0)))
-            .map(|n| n as u32)
+    /// Tasks created since `ms` (every task is a sponsored write) in one
+    /// lane, optionally for one owner.
+    pub fn sponsored_since(&self, ms: i64, lane: Lane, owner: Option<Address>) -> R<u32> {
+        let lane = match lane {
+            Lane::Deployed => "proved_by IS NULL",
+            Lane::Owner => "proved_by IS NOT NULL",
+        };
+        let owner = owner.map(|o| o.to_string().to_lowercase());
+        let sql = format!("SELECT count(*) FROM tasks WHERE created >= ?1 AND {lane} AND (?2 IS NULL OR proved_by = ?2)");
+        self.with(|c| c.query_row(&sql, params![ms, owner], |r| r.get::<_, i64>(0))).map(|n| n as u32)
     }
 
     fn tasks(&self, sql: &str, args: impl rusqlite::Params) -> R<Vec<Task>> {
@@ -143,9 +157,17 @@ fn save_with(c: &Connection, task: &Task) -> R<()> {
     let payload = serde_json::to_string(task).expect("task serializes");
     let status = serde_json::to_value(task.status).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
     c.execute(
-        "INSERT INTO tasks (id, safe, status, created, updated, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO tasks (id, safe, status, created, updated, payload, proved_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status, updated = excluded.updated, payload = excluded.payload",
-        params![task.id, task.safe.to_string().to_lowercase(), status, task.created_ms as i64, task.updated_ms as i64, payload],
+        params![
+            task.id,
+            task.safe.to_string().to_lowercase(),
+            status,
+            task.created_ms as i64,
+            task.updated_ms as i64,
+            payload,
+            task.proved_by.map(|o| o.to_string().to_lowercase()),
+        ],
     )
     .map(|_| ())
 }

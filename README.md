@@ -125,8 +125,11 @@ an address no Safe lives at.
 
 ## Using it (for wallets)
 
-- **Creating a Safe:** deploy it and `record` its genesis in the same batch —
-  or any time before or after; the result is the same.
+- **Creating a Safe:** `record` its genesis. Deploying is not needed: the
+  address is fixed on every chain from that moment, and the first transaction
+  on a chain can deploy it from `deployCallOf`. The service records a Safe
+  deployed nowhere yet at its own expense when an owner's passkey asks
+  (`ownerProof`, see the [API](genesis-cf/README.md)).
 - **A Safe created elsewhere** (for example by Safe{Wallet}): fetch its
   creation parameters once (the creation transaction, or a transaction
   service), then `record` them. From then on nobody needs that source again.

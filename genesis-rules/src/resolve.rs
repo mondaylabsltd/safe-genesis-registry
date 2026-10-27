@@ -35,6 +35,9 @@ pub enum Source {
     TransactionService { tx_hash: Option<B256> },
     Calldata { tx_hash: Option<B256>, function: CreationFunction },
     SafeWalletConfig,
+    /// Sent as is by the caller (a wallet that just created it); accepted
+    /// only because it reproduces the Safe's address.
+    Supplied,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

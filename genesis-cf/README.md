@@ -82,27 +82,62 @@ the authority the replay would create (only when `ready`).
 
 ```json
 {"chainId": 8453, "safe": "0x…"}
-{"chainId": 8453, "safe": "0x…", "safeWalletProps": {…}}   // a Safe deployed nowhere yet
+{"chainId": 8453, "safe": "0x…", "safeWalletProps": {…}}                  // a Safe{Wallet} Safe deployed nowhere yet
+{"chainId": 100,  "safe": "0x…", "genesis": {…}, "ownerProof": {…}}       // a wallet that just created it
 ```
 
-Resolves the Safe's genesis on `chainId` — from the registry on another chain,
-from Safe{Wallet}'s counterfactual config (`undeployedSafes[chain][safe].props`
-in a Safe{Wallet} export), or from the chain's Safe Transaction Service and,
-when the service has no parameters, the creating transaction's calldata. Only
-parameters that reproduce the Safe's address are accepted.
+Resolves the Safe's genesis on `chainId`, in this order:
+
+1. from the registry on another chain;
+2. from `genesis` (`factory`, `singleton`, `saltNonce`, `initializer`), as sent by the wallet that created the Safe;
+3. from Safe{Wallet}'s counterfactual config (`undeployedSafes[chain][safe].props` in a Safe{Wallet} export);
+4. from the chain's Safe Transaction Service, and when the service has no parameters, from the creating
+   transaction's calldata.
+
+Only parameters that reproduce the Safe's address are accepted.
 
 - `200 {"status": "recorded"}` — the home chain already holds it.
-- `202 {"taskId", "status": "queued"}` — verified and queued; the service writes
-  it to the home chain at its own expense. Poll `GET /api/task/{taskId}`.
-  Sponsored only for a Safe that already exists on some chain, within a budget
-  (20 per minute, 500 per day).
-- `200 {"status": "resolved", "recordCall", "reason"}` — not sponsored (no
-  sponsor key, a Safe that exists on no chain yet, or the budget spent): the
-  verified `record(...)` call, for the caller to send.
-- `422 {"refusal"}` — nothing reproduced the address (`unresolved`: `notFound`,
-  `mismatch` with the address the evidence gives instead, or `noCreate2` —
-  `createProxy`, as Wintermute's Safe was, or a chain-specific salt), or the
-  registry would reject the parameters (`unrecordable`).
+- `202 {"taskId", "status": "queued", "provedBy"}` — verified and queued; the service writes it to the home chain
+  at its own expense. Poll `GET /api/task/{taskId}`.
+- `200 {"status": "resolved", "recordCall", "reason"}` — not sponsored (see below): the verified `record(...)`
+  call, for the caller to send.
+- `422 {"refusal"}` — nothing reproduced the address (`unresolved`: `notFound`, `mismatch` with the address the
+  evidence gives instead, or `noCreate2` — `createProxy`, as Wintermute's Safe was, or a chain-specific salt), or
+  the registry would reject the parameters (`unrecordable`).
+
+**Who pays.** Two lanes, counted separately so a flood in one cannot spend the other:
+
+| Lane | When | Budget |
+| --- | --- | --- |
+| Deployed | the Safe exists on some chain (its creator paid for a deployment) | 20 per minute, 500 per day |
+| Owner | the Safe exists nowhere yet, and `ownerProof` proves an owner asks | 10 per minute, 300 per day, and 5 per owner per day |
+
+Anything else — no sponsor key, a Safe deployed nowhere without a valid proof, a spent budget — gets `resolved`,
+and `reason` says which.
+
+**`ownerProof`** — an owner that is a passkey wallet (a Vela account), signing with its passkey:
+
+```json
+{
+  "owner": "0x…",                // an owner in the Safe's setup
+  "ownerGenesis": {"factory", "singleton", "saltNonce", "initializer"},   // the owner wallet's own genesis
+  "authenticatorData": "0x…",
+  "clientDataJSON": "{\"type\":\"webauthn.get\",\"challenge\":\"…\",…}",   // the exact text that was signed
+  "signature": "0x…"             // r ‖ s (64 bytes) or DER
+}
+```
+
+- The WebAuthn challenge is `keccak256("safe-genesis-registry/sponsor/v1" ‖ safe)`, the 20-byte Safe address.
+  `clientDataJSON.challenge` is its base64url form without padding.
+- `ownerGenesis` must deploy to `owner`, and set up a wallet that its passkeys control on their own:
+  - a setup the replay check reads completely;
+  - threshold 1;
+  - each key a signer among its owners, either the shared signer `configure`d during setup or a signer the passkey
+    factory creates.
+- The assertion must be a `webauthn.get` with the user-present flag set, signed by one of those keys.
+- Nothing else is read (no index, no chain state beyond the owner factory's proxy code).
+- A key costs nothing to make, so the proof is not a cost to the caller. What it does is put these writes in their
+  own lane with a per-owner quota. Replaying a proof is harmless: records are write-once.
 
 ### Caching
 

@@ -4,7 +4,10 @@
 
 use futures_util::future::join_all;
 use genesis_rules::cache::{self, Endpoint};
-use genesis_rules::import::{self, Sponsorship, Task};
+use genesis_rules::genesis::Genesis;
+use genesis_rules::import::{self, Evidence, Lane, Sponsorship, Task, Usage};
+use genesis_rules::known::KnownContracts;
+use genesis_rules::owner_proof::{self, OwnerProof};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -221,30 +224,38 @@ impl Edge {
                 return Ok(view::error(502, "factory did not answer proxyCreationCode()"));
             };
             (Resolution::Found { genesis: r.genesis, source: Source::Registry { chain_id } }, code, chain_id)
+        } else if let Some(genesis) = req.genesis {
+            let Some(code) = registry::proxy_code(&Rpc::new(chain), genesis.factory).await else {
+                return Ok(view::error(502, "factory did not answer proxyCreationCode()"));
+            };
+            (Resolution::Found { genesis, source: Source::Supplied }, code, chain.chain_id)
         } else {
             match resolve_on(&Rpc::new(chain), chain, safe, req.safe_wallet_props).await {
                 Ok((resolution, code)) => (resolution, code, chain.chain_id),
                 Err(answer) => return Ok(answer),
             }
         };
-        let task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, now_ms()) {
+        let mut task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, now_ms()) {
             Ok(t) => t,
             Err(refusal) => return Ok(view::import_refused(safe, &refusal)),
         };
         if self.config.private_key.is_none() {
             return Ok(view::import_resolved(&task, self.config.registry, &Sponsorship::Sponsor));
         }
-        let sponsorship = self.sponsorship(&task).await?;
+        let evidence = self.evidence(&task, chain, req.owner_proof.as_ref()).await;
+        let sponsorship = self.sponsorship(&evidence).await?;
         if sponsorship != Sponsorship::Sponsor {
             return Ok(view::import_resolved(&task, self.config.registry, &sponsorship));
         }
+        task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
         let queued: Task = self.do_post("/enqueue", &task).await?;
         self.invalidate(safe).await;
         Ok(view::import_queued(&queued))
     }
 
-    /// Sponsor only a Safe that exists on some chain, within the budget.
-    async fn sponsorship(&self, task: &Task) -> Result<Sponsorship> {
+    /// Why the service might pay: a deployment on some chain, else the
+    /// caller's owner proof, verified against the owner factory's proxy code.
+    async fn evidence(&self, task: &Task, chain: &ChainConfig, proof: Option<&OwnerProof>) -> Evidence {
         let mut deployed = false;
         for chain_id in [task.source_chain_id, self.config.home_chain_id] {
             if let Some(c) = self.config.chain(chain_id)
@@ -254,14 +265,38 @@ impl Edge {
                 break;
             }
         }
-        let now = now_ms();
-        let count = |since: u64| async move {
-            let v = self.do_json(&format!("/sponsored?since={since}")).await.ok();
+        let verdict = match proof {
+            Some(p) if !deployed => Some(match registry::proxy_code(&Rpc::new(chain), p.owner_genesis.factory).await {
+                Some(code) => owner_proof::verify(task.safe, &task.genesis, p, &code, KnownContracts::embedded()),
+                None => Err(owner_proof::ProofError::OwnerFactoryUnanswered { factory: p.owner_genesis.factory }),
+            }),
+            _ => None,
+        };
+        Evidence::assess(deployed, verdict)
+    }
+
+    /// The evidence's lane, within its budget and the owner's quota.
+    async fn sponsorship(&self, evidence: &Evidence) -> Result<Sponsorship> {
+        let Some((lane, owner)) = evidence.lane() else {
+            return Ok(import::sponsorship(evidence, Usage::default()));
+        };
+        let lane = match lane {
+            Lane::Deployed => "deployed",
+            Lane::Owner => "owner",
+        };
+        let count = |since: u64, owner: Option<Address>| async move {
+            let owner = owner.map(|o| format!("&owner={o}")).unwrap_or_default();
+            let v = self.do_json(&format!("/sponsored?since={since}&lane={lane}{owner}")).await.ok();
             v.and_then(|v| v.get("count").and_then(Value::as_u64)).unwrap_or(u64::MAX) as u32
         };
-        let minute = count(now.saturating_sub(60_000)).await;
-        let day = count(now.saturating_sub(86_400_000)).await;
-        Ok(import::sponsorship(deployed, minute, day, import::DEFAULT_BUDGET))
+        let now = now_ms();
+        let day_ago = now.saturating_sub(86_400_000);
+        let usage = Usage {
+            minute: count(now.saturating_sub(60_000), None).await,
+            day: count(day_ago, None).await,
+            owner_day: if owner.is_some() { count(day_ago, owner).await } else { 0 },
+        };
+        Ok(import::sponsorship(evidence, usage))
     }
 
     // -- durable object -----------------------------------------------------------------
@@ -352,6 +387,10 @@ struct ImportRequest {
     safe: Address,
     /// Safe{Wallet}'s counterfactual config, for a Safe deployed nowhere yet.
     safe_wallet_props: Option<SafeWalletProps>,
+    /// The genesis itself, from the wallet that created the Safe.
+    genesis: Option<Genesis>,
+    /// An owner asking for a Safe deployed nowhere yet to be sponsored.
+    owner_proof: Option<OwnerProof>,
 }
 
 fn parse_address(s: &str) -> Result<Address> {

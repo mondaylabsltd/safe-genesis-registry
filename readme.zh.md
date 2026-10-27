@@ -54,7 +54,7 @@ safe         = address(keccak256(0xff ‖ factory ‖ salt ‖ initCodeHash)[12:
 
 ## 钱包怎么用
 
-- **创建 Safe：** 部署时在同一批交易里 `record`。之前或之后再写也可以，结果完全一样。
+- **创建 Safe：** `record` 它的 genesis 即可，不需要部署。从这一刻起它在每条链上的地址都确定了，某条链上的第一笔交易可以用 `deployCallOf` 顺带部署它。还没在任何链上部署的 Safe，只要一个 owner 用 passkey 发起请求（`ownerProof`，见 [API](genesis-cf/README.md)），服务就会代付写入。
 - **别处创建的 Safe**（比如 Safe{Wallet}）：只需从创建交易或交易服务里取一次创建参数，然后 `record`。之后谁都不再需要那个来源。如果 `record` 返回的地址和这个 Safe 不一致，说明参数错了。
 - **扩展到新链：**
   1. 在任意一条有记录的链上调 `deployCallOf(safe)`。

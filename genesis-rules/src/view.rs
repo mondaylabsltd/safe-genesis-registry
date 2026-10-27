@@ -117,7 +117,7 @@ pub fn import_recorded(safe: Address, l: &Lookup) -> (u16, Value) {
 }
 
 pub fn import_queued(t: &Task) -> (u16, Value) {
-    (202, json!({"safe": t.safe, "taskId": t.id, "status": t.status, "source": t.source}))
+    (202, json!({"safe": t.safe, "taskId": t.id, "status": t.status, "source": t.source, "provedBy": t.proved_by}))
 }
 
 /// Not sponsored (read-only deployment, a Safe that exists nowhere, or the

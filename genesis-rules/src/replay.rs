@@ -255,7 +255,7 @@ pub fn addresses_to_read(genesis: &Genesis, known: &KnownContracts) -> Vec<Addre
 
 /// Decode only canonical encodings: re-encoding must give the same bytes, so
 /// nothing can hide in padding or trailing data.
-fn exact<C: SolCall>(data: &[u8]) -> Option<C> {
+pub(crate) fn exact<C: SolCall>(data: &[u8]) -> Option<C> {
     C::abi_decode(data).ok().filter(|c| c.abi_encode() == data)
 }
 
@@ -267,11 +267,11 @@ fn need(known: &KnownContracts, address: Address, kind: Kind) -> Result<(), Prob
     }
 }
 
-struct Leg {
-    operation: u8,
-    to: Address,
-    value: U256,
-    data: Vec<u8>,
+pub(crate) struct Leg {
+    pub(crate) operation: u8,
+    pub(crate) to: Address,
+    pub(crate) value: U256,
+    pub(crate) data: Vec<u8>,
 }
 
 /// MultiSend's packed encoding — operation(1) ‖ to(20) ‖ value(32) ‖
@@ -279,7 +279,7 @@ struct Leg {
 /// unless the legs consume every byte: the contract keeps reading past a
 /// short tail or an over-long length (into zeroed memory), so any input this
 /// parser would not consume exactly is one whose execution it cannot predict.
-fn multisend_legs(packed: &[u8]) -> Result<Vec<Leg>, String> {
+pub(crate) fn multisend_legs(packed: &[u8]) -> Result<Vec<Leg>, String> {
     let mut legs = Vec::new();
     let mut i = 0usize;
     while i < packed.len() {

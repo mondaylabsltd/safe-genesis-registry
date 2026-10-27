@@ -11,7 +11,10 @@ use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::future::join_all;
 use genesis_rules::cache::{self, Endpoint};
-use genesis_rules::import::{self, Sponsorship, Task};
+use genesis_rules::genesis::Genesis;
+use genesis_rules::import::{self, Evidence, Sponsorship, Task, Usage};
+use genesis_rules::known::KnownContracts;
+use genesis_rules::owner_proof::{self, OwnerProof};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -203,6 +206,8 @@ struct ImportRequest {
     chain_id: u64,
     safe: Address,
     safe_wallet_props: Option<SafeWalletProps>,
+    genesis: Option<Genesis>,
+    owner_proof: Option<OwnerProof>,
 }
 
 async fn import_safe(app: &App, body: Body) -> Response {
@@ -234,23 +239,30 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
             return view::error(502, "factory did not answer proxyCreationCode()");
         };
         (Resolution::Found { genesis: r.genesis, source: Source::Registry { chain_id } }, code, chain_id)
+    } else if let Some(genesis) = req.genesis {
+        let Some(code) = registry::proxy_code(&Rpc::new(c), genesis.factory).await else {
+            return view::error(502, "factory did not answer proxyCreationCode()");
+        };
+        (Resolution::Found { genesis, source: Source::Supplied }, code, c.chain_id)
     } else {
         match resolve_on(&Rpc::new(c), c, safe, req.safe_wallet_props).await {
             Ok((resolution, code)) => (resolution, code, c.chain_id),
             Err(answer) => return answer,
         }
     };
-    let task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, crate::now_ms()) {
+    let mut task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, crate::now_ms()) {
         Ok(t) => t,
         Err(refusal) => return view::import_refused(safe, &refusal),
     };
     if cfg.private_key.is_none() {
         return view::import_resolved(&task, cfg.registry, &Sponsorship::Sponsor);
     }
-    let sponsorship = sponsorship(app, &task).await;
+    let evidence = evidence(app, &task, c, req.owner_proof.as_ref()).await;
+    let sponsorship = sponsorship(app, &evidence);
     if sponsorship != Sponsorship::Sponsor {
         return view::import_resolved(&task, cfg.registry, &sponsorship);
     }
+    task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
     let queued = match app.store.enqueue(&task) {
         Ok(t) => t,
         Err(e) => return view::error(500, &format!("store: {e}")),
@@ -260,8 +272,9 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
     view::import_queued(&queued)
 }
 
-/// Sponsor only a Safe that exists on some chain, within the budget.
-async fn sponsorship(app: &App, task: &Task) -> Sponsorship {
+/// Why the service might pay: a deployment on some chain, else the caller's
+/// owner proof, verified against the owner factory's proxy code.
+async fn evidence(app: &App, task: &Task, c: &ChainConfig, proof: Option<&OwnerProof>) -> Evidence {
     let cfg = &app.config;
     let mut deployed = false;
     for chain_id in [task.source_chain_id, cfg.home_chain_id] {
@@ -272,10 +285,29 @@ async fn sponsorship(app: &App, task: &Task) -> Sponsorship {
             break;
         }
     }
+    let verdict = match proof {
+        Some(p) if !deployed => Some(match registry::proxy_code(&Rpc::new(c), p.owner_genesis.factory).await {
+            Some(code) => owner_proof::verify(task.safe, &task.genesis, p, &code, KnownContracts::embedded()),
+            None => Err(owner_proof::ProofError::OwnerFactoryUnanswered { factory: p.owner_genesis.factory }),
+        }),
+        _ => None,
+    };
+    Evidence::assess(deployed, verdict)
+}
+
+/// The evidence's lane, within its budget and the owner's quota.
+fn sponsorship(app: &App, evidence: &Evidence) -> Sponsorship {
+    let Some((lane, owner)) = evidence.lane() else {
+        return import::sponsorship(evidence, Usage::default());
+    };
     let now = crate::now_ms() as i64;
-    let minute = app.store.sponsored_since(now - 60_000).unwrap_or(u32::MAX);
-    let day = app.store.sponsored_since(now - 86_400_000).unwrap_or(u32::MAX);
-    import::sponsorship(deployed, minute, day, import::DEFAULT_BUDGET)
+    let count = |since: i64, owner: Option<Address>| app.store.sponsored_since(since, lane, owner).unwrap_or(u32::MAX);
+    let usage = Usage {
+        minute: count(now - 60_000, None),
+        day: count(now - 86_400_000, None),
+        owner_day: if owner.is_some() { count(now - 86_400_000, owner) } else { 0 },
+    };
+    import::sponsorship(evidence, usage)
 }
 
 fn invalidate(app: &App, safe: Address) {

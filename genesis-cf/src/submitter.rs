@@ -79,12 +79,18 @@ impl DurableObject for SubmitterDo {
                 None => Ok(Response::from_json(&json!({"error": "unknown task"}))?.with_status(404)),
             },
             "/sponsored" => {
-                // Tasks created since `since` (every task is a sponsored write).
+                // Tasks created since `since` (every task is a sponsored write)
+                // in one lane, optionally for one owner.
                 let since: i64 = param("since").parse().unwrap_or(0);
-                let rows: Vec<NumberRow> = self
-                    .sql()
-                    .exec("SELECT count(*) AS n FROM tasks WHERE created >= ?1", vec![SqlStorageValue::from(since)])?
-                    .to_array()?;
+                let lane = if param("lane") == "owner" { "proved_by IS NOT NULL" } else { "proved_by IS NULL" };
+                let mut sql = format!("SELECT count(*) AS n FROM tasks WHERE created >= ?1 AND {lane}");
+                let mut args = vec![SqlStorageValue::from(since)];
+                let owner = param("owner").to_lowercase();
+                if !owner.is_empty() {
+                    sql.push_str(" AND proved_by = ?2");
+                    args.push(SqlStorageValue::from(owner));
+                }
+                let rows: Vec<NumberRow> = self.sql().exec(&sql, args)?.to_array()?;
                 Response::from_json(&json!({"count": rows.first().and_then(|r| r.n).unwrap_or(0)}))
             }
             "/stats" => {
@@ -203,7 +209,8 @@ impl SubmitterDo {
                  status  TEXT NOT NULL,
                  created INTEGER NOT NULL,
                  updated INTEGER NOT NULL,
-                 payload TEXT NOT NULL
+                 payload TEXT NOT NULL,
+                 proved_by TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_tasks_safe ON tasks (safe);
              CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks (status, updated);
@@ -212,6 +219,14 @@ impl SubmitterDo {
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
             None,
         )?;
+        // Tables made before the owner lane existed lack its column.
+        let has: Vec<NumberRow> = self
+            .sql()
+            .exec("SELECT count(*) AS n FROM pragma_table_info('tasks') WHERE name = 'proved_by'", None)?
+            .to_array()?;
+        if has.first().and_then(|r| r.n) == Some(0) {
+            self.sql().exec("ALTER TABLE tasks ADD COLUMN proved_by TEXT", None)?;
+        }
         Ok(())
     }
 
@@ -219,7 +234,7 @@ impl SubmitterDo {
         let payload = serde_json::to_string(task).map_err(|e| worker::Error::RustError(e.to_string()))?;
         let status = serde_json::to_value(task.status).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
         self.sql().exec(
-            "INSERT INTO tasks (id, safe, status, created, updated, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO tasks (id, safe, status, created, updated, payload, proved_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET status = excluded.status, updated = excluded.updated, payload = excluded.payload",
             vec![
                 SqlStorageValue::from(task.id.as_str()),
@@ -228,6 +243,7 @@ impl SubmitterDo {
                 SqlStorageValue::from(task.created_ms as i64),
                 SqlStorageValue::from(task.updated_ms as i64),
                 SqlStorageValue::from(payload),
+                task.proved_by.map(|o| SqlStorageValue::from(o.to_string().to_lowercase())).unwrap_or(SqlStorageValue::Null),
             ],
         )?;
         Ok(())
