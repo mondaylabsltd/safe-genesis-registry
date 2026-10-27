@@ -1,0 +1,341 @@
+{
+ "safeDeploymentsCommit": "b45417dd009957effb3575928941e736f8fd37d1",
+ "contracts": [
+  {
+   "address": "0xf48f2b2d2a534e402487b3ee7c18c33aec0fe5e4",
+   "codeHash": "0x03e69f7ce809e81687c69b19a7d7cca45b6d551ffdec73d9bb87178476de1abf",
+   "name": "CompatibilityFallbackHandler 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x017062a1de2fe6b99be3d9d37841fed19f573804",
+   "codeHash": "0x03e69f7ce809e81687c69b19a7d7cca45b6d551ffdec73d9bb87178476de1abf",
+   "name": "CompatibilityFallbackHandler 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xfd0732dc9e303f09fcef3a7388ad10a83459ec99",
+   "codeHash": "0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9",
+   "name": "CompatibilityFallbackHandler 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x3efcbb83a4a7afcb4f68d501e2c2203a38be77f4",
+   "codeHash": "0x3c6a85bcf7b563daa624b884b4e9a1b9fa5371edde7be945d998071a48f28bbc",
+   "name": "CompatibilityFallbackHandler 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xf61a721642b0c0c8b334ba3763ba1326f53798c0",
+   "codeHash": "0x83941bb48a3e3302a6e502e61513981ad02f3870f2d15e6d9cd301d616a0ba38",
+   "name": "CreateAndAddModules 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x8538fcbccba7f5303d2c679fa5d7a629a8c9bf4a",
+   "codeHash": "0x9de5afc9afd2bc0e329d9b4fa34955da45bb8e11587c645c5ff5287d7507adeb",
+   "name": "CreateCall 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x7cbb62eaa69f79e6873cd1ecb2392971036cfaa4",
+   "codeHash": "0x8155d988823a4f6f1bcbc76a64af8e510c4ce68819290d43cf24956bd24dee82",
+   "name": "CreateCall 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xb19d6ffc2182150f8eb585b79d4abcd7c5640a9d",
+   "codeHash": "0x8155d988823a4f6f1bcbc76a64af8e510c4ce68819290d43cf24956bd24dee82",
+   "name": "CreateCall 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x9b35af71d77eaf8d7e40252370304687390a1a52",
+   "codeHash": "0x2b3060c55fcb8275653e99ad511a71f67ba76934ed66a7d74d6e68b52afff889",
+   "name": "CreateCall 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x2ef5ecfbea521449e4de05edb1ce63b75eda90b4",
+   "codeHash": "0x6b7d8d29bdf7004c4617d95041923774f3f7e74b056bff55c1861c9ec92ce54f",
+   "name": "CreateCall 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xd5d82b6addc9027b22dca772aa68d5d74cdbdf44",
+   "codeHash": "0x919a9f5dd111a01f7a8e4b1f5c6a972bb2d1441c67bdec71de6a09d0be92f5b9",
+   "name": "DefaultCallbackHandler 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x85a8ca358d388530ad0fb95d0cb89dd44fc242c3",
+   "codeHash": "0xba5bafdfba82e226b6dc8ae29bedf5026bd854ab4bee00128ca322717a5f2acf",
+   "name": "ExtensibleFallbackHandler 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x34cfac646f301356faa8b21e94227e3583fe3f5f",
+   "codeHash": "0x56b8be58b5ad629a621593a2e5e5e8e9a28408dc06e95597497b303902772e45",
+   "name": "GnosisSafe 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xd9db270c1b5e3bd161e8c8503c55ceabee709552",
+   "codeHash": "0xbba688fbdb21ad2bb58bc320638b43d94e7d100f6f3ebaab0a4e4de6304b1c2e",
+   "name": "GnosisSafe 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x69f4d1788e39c87893c980c06edf4b7f686e2938",
+   "codeHash": "0xbba688fbdb21ad2bb58bc320638b43d94e7d100f6f3ebaab0a4e4de6304b1c2e",
+   "name": "GnosisSafe 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x3e5c63644e683549055b9be8653de26e0b4cd36e",
+   "codeHash": "0x21842597390c4c6e3c1239e434a682b054bd9548eee5e9b1d6a4482731023c0f",
+   "name": "GnosisSafeL2 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xfb1bffc9d739b8d520daf37df666da4c687191ea",
+   "codeHash": "0x21842597390c4c6e3c1239e434a682b054bd9548eee5e9b1d6a4482731023c0f",
+   "name": "GnosisSafeL2 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xa6b71e26c5e0845f74c812102ca7114b6a896ab2",
+   "codeHash": "0x337d7f54be11b6ed55fef7b667ea5488db53db8320a05d1146aa4bd169a39a9b",
+   "name": "GnosisSafeProxyFactory 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xc22834581ebc8527d974f8a1c97e1bea4ef910bc",
+   "codeHash": "0x337d7f54be11b6ed55fef7b667ea5488db53db8320a05d1146aa4bd169a39a9b",
+   "name": "GnosisSafeProxyFactory 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x8d29be29923b68abfdd21e541b9374737b49cdad",
+   "codeHash": "0xe4e9b4d4c1e3ff06cd51afe0b51eb1b22c0bab51eab38d428ee74540a5ff603e",
+   "name": "MultiSend 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xa238cbeb142c10ef7ad8442c6d1f9e89e07e7761",
+   "codeHash": "0x0208282bd262360d0320862c5ac70f375f5ed3b9d89a83a615b4d398415bdc83",
+   "name": "MultiSend 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x998739bfdaadde7c933b942a68053933098f9eda",
+   "codeHash": "0x81db0e4afdf5178583537b58c5ad403bd47a4ac7f9bde2442ef3e341d433126a",
+   "name": "MultiSend 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x38869bf66a61cf6bdb996a6ae40d5853fd43b526",
+   "codeHash": "0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77",
+   "name": "MultiSend 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x218543288004cd07832472d464648173c77d7eb7",
+   "codeHash": "0xca1147a12963172a93910c5cb2bfa5ad0e941c7f03fc7eb017dd06a8ea4e5604",
+   "name": "MultiSend 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x40a2accbd92bca938b02010e17a5b8929b49130d",
+   "codeHash": "0xa9865ac2d9c7a1591619b188c4d88167b50df6cc0c5327fcbd1c8c75f7c066ad",
+   "name": "MultiSendCallOnly 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xa1dabef33b3b82c7814b6d82a79e50f4ac44102b",
+   "codeHash": "0xa9865ac2d9c7a1591619b188c4d88167b50df6cc0c5327fcbd1c8c75f7c066ad",
+   "name": "MultiSendCallOnly 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x9641d764fc13c8b624c04430c7356c1c7c8102e2",
+   "codeHash": "0xecd5bd14a08c5d2122379900b2f272bdf107a7e92423c10dd5fe3254386c9939",
+   "name": "MultiSendCallOnly 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xa83c336b20401af773b6219ba5027174338d1836",
+   "codeHash": "0xcdbdcec38d2f1c7d961b0029ff8416b7e86e9974d6f0e9c9580c7d17fcfb6663",
+   "name": "MultiSendCallOnly 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x76e2cfc1f5fa8f6a5b3fc4c8f4788f0116861f9b",
+   "codeHash": "0x0f0bb9c13be3b595d6f0fde841d5247a96f7e315bd8b97e1363553bee9a7d995",
+   "name": "ProxyFactory 1.1.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x41675c099f32341bf84bfc5382af534df5c7461a",
+   "codeHash": "0x1fe2df852ba3299d6534ef416eefa406e56ced995bca886ab7a553e6d0c5e1c4",
+   "name": "Safe 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xff51a5898e281db6dfc7855790607438df2ca44b",
+   "codeHash": "0xdda019cbd7c867a533a2a86e5c53434fdc50b13122b5a5ddb4a8df61b31c20f2",
+   "name": "Safe 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xa581c4a4db7175302464ff3c06380bc3270b4037",
+   "codeHash": "0x1cc7d3ede9aaaaa4196c947e4852efb6d984ecfb3a9254d08855c61746a40c44",
+   "name": "Safe4337Module v0.2.0",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x75cf11467937ce3f2f357ce24ffc3dbf8fd5c226",
+   "codeHash": "0x2aea997c4e3cf0e2f333025372e219abcfde81c21fc2f8fb066414a5685dd3e0",
+   "name": "Safe4337Module v0.3.0",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x29fcb43b46531bca003ddc8fcb67ffe91900c762",
+   "codeHash": "0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff",
+   "name": "SafeL2 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xedd160febbd92e350d4d398fb636302fccd67c7e",
+   "codeHash": "0x180193227186ccb85316c94db1f0d156ed932b14712cfaac78901899178572dc",
+   "name": "SafeL2 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x526643f69b81b008f46d95cd5ced5ec0edffdac6",
+   "codeHash": "0xc00d7921460cd5a05393e7772e634bd7d212f356356aa3a77f0120a9b8e25e99",
+   "name": "SafeMigration 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x6439e7abd8bb915a5263094784c5cf561c4172ac",
+   "codeHash": "0x52d7472fa02c3a574544f9b5a4ed4c7777e4e3315217e368926b51e1cc6014ea",
+   "name": "SafeMigration 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x8ecd4ec46d4d2a6b64fe960b3d64e8b94b2234eb",
+   "codeHash": "0x1a9e40189281d32301a216d43f33904b7380a36dd1727442afba068984e9da55",
+   "name": "SafeModuleSetup v0.2.0",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x2dd68b007b46fbe91b9a7c3eda5a7a1063cb5b47",
+   "codeHash": "0xaf2d170bb766d2773c3fa88717f5b3599827478074d3767d1dee55e5c2f3fbcb",
+   "name": "SafeModuleSetup v0.3.0",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x4e1dcf7ad4e460cfd30791ccc4f9c8a4f820ec67",
+   "codeHash": "0x50c3cdc4074750a7a974204a716c999edd37482f907608d960b2b025ee0b3317",
+   "name": "SafeProxyFactory 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x14f2982d601c9458f93bd70b218933a6f8165e7b",
+   "codeHash": "0x967dae4cda22b0c9ef7f31b010bdc1ceb0af9904b0c3dc060b5302e4c18a4529",
+   "name": "SafeProxyFactory 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xff83f6335d8930cbad1c0d439a841f01888d9f69",
+   "codeHash": "0xa83e7be2fa20c96dc9575e3937239d552f3831ea437d7c96397eec8736f0cba0",
+   "name": "SafeToL2Migration 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xbd89a1ce4dde368ffab0ec35506eece0b1ffdc54",
+   "codeHash": "0x2f25df28caf984366ee584e13241707e85dcd5a6ea0c14267928dafc1fd6274b",
+   "name": "SafeToL2Setup 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x900c7589200010d6c6ecaae5b06ebe653bc2d82a",
+   "codeHash": "0xf6034d841bcbff8912aa55526b0f1609212536aaf60bb16f5e8a269a4ab38f18",
+   "name": "SafeToL2Setup 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x94a4f6affbd8975951142c3999aeab7ecee555c2",
+   "codeHash": "0xeaa32d0280053e2feea48a7c3fa15a535cd07c23ff60c9469cfa1999533e9332",
+   "name": "SafeWebAuthnSharedSigner v0.2.1",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x1d31f259ee307358a26dfb23eb365939e8641195",
+   "codeHash": "0x655b1f71eedf5aa223c8a7f5fc70f140a6475259a030829bc731642e181e4853",
+   "name": "SafeWebAuthnSignerFactory v0.2.1",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0x4e27b51350e6c2083ee19011120f50dafec5ca50",
+   "codeHash": "0x2f10c1deb6dc4c1756da418188d9a5c46ebb9c63080bc7906512f5e8539b2aff",
+   "name": "SafeWebAuthnSignerSingleton v0.2.1",
+   "source": "observed identical on chains 100, 8453"
+  },
+  {
+   "address": "0xa65387f16b013cf2af4605ad8aa5ec25a2cba3a2",
+   "codeHash": "0x3ac65dea3cc9dd0d7b7b800f834e3d73415b4e944bb94555c3e4a08fb137e918",
+   "name": "SignMessageLib 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x98ffbbf51bb33a056b08ddf711f289936aaff717",
+   "codeHash": "0x3ac65dea3cc9dd0d7b7b800f834e3d73415b4e944bb94555c3e4a08fb137e918",
+   "name": "SignMessageLib 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0xd53cd0ab83d845ac265be939c57f53ad838012c9",
+   "codeHash": "0x525c754a46b79e05543a59bb61e8de3c9eee0d955a59352409cbe67ea1077528",
+   "name": "SignMessageLib 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x4ffef8222648872b3de295ba1e49110e61f5b5aa",
+   "codeHash": "0xd61840855da008da59a00fc03fb71455b4f70bdca1f56f9504f072ed8d90c50e",
+   "name": "SignMessageLib 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x59ad6735bcd8152b84860cb256dd9e96b85f69da",
+   "codeHash": "0xb3fb9763869f2c09a2ac5a425d2dd6060bf7ef46b3899049d71a711e71e00f04",
+   "name": "SimulateTxAccessor 1.3.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x727a77a074d1e6c4530e814f89e618a3298fc044",
+   "codeHash": "0x66712e1d9161706f826d8d74a3cc03db0289b2530a1202f24d52986952b69a02",
+   "name": "SimulateTxAccessor 1.3.0 (eip155)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x3d4ba2e0884aa488718476ca2fb8efc291a46199",
+   "codeHash": "0x91f82615581fc73b190b83d72e883608b25e392f72322035df1b13d51766cf8d",
+   "name": "SimulateTxAccessor 1.4.1 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x07efa797c55b5dde3698d876b277abb6b893654c",
+   "codeHash": "0x706db4bb6151f75a5b3845724174e201c59046dfbe65b4e5909ad4b88f8f752d",
+   "name": "SimulateTxAccessor 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  },
+  {
+   "address": "0x54e86d004d71a8d2112ec75face57d730b0433f3",
+   "codeHash": "0xcbc723172700efa52cc33ee26c7fc7e284edc8097f9dc307857fe525fec98cd8",
+   "name": "TokenCallbackHandler 1.5.0 (canonical)",
+   "source": "safe-deployments@b45417dd"
+  }
+ ]
+}

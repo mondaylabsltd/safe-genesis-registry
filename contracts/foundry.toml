@@ -1,0 +1,22 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 200
+# No PUSH0: the registry must deploy on every EVM chain, including those
+# that never adopted Shanghai.
+evm_version = "paris"
+# The deterministic deployment address is keccak(initcode). Without these two
+# the CBOR metadata (which hashes comments and source paths) would move the
+# address on every doc edit; with them the bytecode depends on code alone.
+bytecode_hash = "none"
+cbor_metadata = false
+# The real-Safe fixture is read from disk; replaying hundreds of Safes in one
+# test needs more than the default per-test gas.
+fs_permissions = [{ access = "read", path = "test/data" }]
+gas_limit = "18446744073709551615"
+
+[fuzz]
+runs = 1024

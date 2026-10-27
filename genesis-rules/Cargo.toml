@@ -1,0 +1,13 @@
+[package]
+name = "genesis-rules"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+# The rules own the service's vocabulary and every decision it makes. The
+# crate is deliberately I/O-free: no HTTP, no storage, no clocks, no runtime.
+# Shells (genesis-cf) fetch what a rule asks for and act on what it returns.
+[dependencies]
+alloy = { version = "2.2.0", default-features = false, features = ["sol-types", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

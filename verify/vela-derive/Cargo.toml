@@ -1,0 +1,11 @@
+[package]
+name = "vela-derive"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Point this at a checkout of https://github.com/mondaylabsltd/vela-wallet.
+vela-core = { path = "../../../vela-wallet/rust/crates/vela-core" }
+serde_json = "1"
+
+[workspace]

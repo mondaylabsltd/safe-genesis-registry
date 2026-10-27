@@ -1,0 +1,16 @@
+# The Safe Genesis Registry service, self-hosted.
+#   cp .env.example .env    # then set REGISTRY_ADDRESS (and PRIVATE_KEY to sponsor imports)
+#   docker compose up -d
+services:
+  safe-genesis:
+    build: .
+    image: safe-genesis-registry:local
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - genesis-data:/data
+
+volumes:
+  genesis-data: {}

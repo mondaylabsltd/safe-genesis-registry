@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["genesis-rules", "genesis-server"]
+# genesis-cf builds only for wasm32 (Cloudflare Workers); keeping it out of
+# the workspace keeps native `cargo test --workspace` free of wasm deps.
+# verify/vela-derive is a one-off verification tool with its own workspace.
+exclude = ["genesis-cf", "verify/vela-derive"]

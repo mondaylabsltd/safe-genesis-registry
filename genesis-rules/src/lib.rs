@@ -1,0 +1,52 @@
+//! Pure rules for the Safe Genesis Registry service.
+//!
+//! The registry contract stores, per Safe address, the creation parameters
+//! that deploy it (its *genesis*). This crate decides everything the service
+//! does around it, without performing any I/O itself:
+//!
+//! - [`address`] — Safe address derivation, step for step the contract's.
+//! - [`abi`] — the contract interfaces the service speaks.
+//! - [`genesis`] — the genesis value, the registry's calldata and responses.
+//! - [`setup`] — Safe `setup()` initializers: decoding, encoding, and the
+//!   defects that make a creation revert wherever it is replayed.
+//! - [`resolve`] — turning creation evidence (a transaction service record,
+//!   a creating transaction's calldata, a Safe{Wallet} config) into a genesis
+//!   that provably reproduces the Safe's address.
+//! - [`known`] — the contracts a creation may depend on, with the code each
+//!   must have on a chain and the kind of contract each is.
+//! - [`passkey`] — where Safe's passkey signer factory puts a signer.
+//! - [`replay`] — whether replaying a genesis on a given chain recreates the
+//!   same wallet: the dependencies it touches and the verdict.
+//! - [`drift`] — a Safe's original members against its current ones.
+//! - [`import`] — the sponsored-import task: admission and the next step,
+//!   with the chain as the only judge of completion.
+//! - [`fees`] — EIP-1559 pricing and the spending cap for those writes.
+//! - [`lookup`] — every chain's `genesisOf` answer merged into one lookup.
+//! - [`cache`] — how long each response may be served from cache.
+//! - [`sentinel`] — operator alerts: a stuck queue, a low sponsor balance,
+//!   failed tasks; when to send, repeat and clear them.
+//! - [`view`] — the response bodies, identical in every shell.
+
+pub mod abi;
+pub mod address;
+pub mod cache;
+pub mod drift;
+pub mod fees;
+pub mod genesis;
+pub mod import;
+pub mod known;
+pub mod lookup;
+pub mod passkey;
+pub mod replay;
+pub mod resolve;
+pub mod sentinel;
+pub mod setup;
+pub mod view;
+
+pub use alloy::primitives::{Address, B256, Bytes, U256};
+
+/// The chains a deployment serves unless it configures its own: an EVM
+/// CREATE2 rule, the canonical Safe deployments, a Safe transaction service.
+/// `[{"chainId", "name", "rpcs": [..], "txService"}]`; shells parse it into
+/// their own config type.
+pub const DEFAULT_CHAINS_JSON: &str = include_str!("../data/chains.json");

@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `npx wrangler dev`.
+REGISTRY_ADDRESS=0xdA88357C2eB85e7e0515B1122a28befd6Dc8fb89
+# An anvil default key, for local forks only. Never a real key in this file.
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+HOME_CHAIN_ID=100
+# Local forks instead of public RPCs:
+# CHAINS=[{"chainId":100,"name":"Gnosis (fork)","rpcs":["http://127.0.0.1:8545"],"txService":"https://api.safe.global/tx-service/gno"},{"chainId":8453,"name":"Base (fork)","rpcs":["http://127.0.0.1:8546"],"txService":"https://api.safe.global/tx-service/base"}]

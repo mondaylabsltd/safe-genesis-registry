@@ -1,0 +1,338 @@
+[
+ {
+  "chainId": 1,
+  "address": "0x8772E3a2D86B9347A2688f9bc1808A6d8917760C",
+  "label": "Lido CircuitBreaker Committee",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 1,
+  "address": "0x73b047fe6337183A454c5217241D780a932777bD",
+  "label": "Lido Emergency Brakes: Ethereum",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 10,
+  "address": "0x4Cf8fE0A4c2539F7EFDD2047d8A5D46F14613088",
+  "label": "Lido Emergency Brakes: Optimism",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 42161,
+  "address": "0xfDCf209A213a0b3C403d543F87E74FCbcA11de34",
+  "label": "Lido Emergency Brakes: Arbitrum",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 8453,
+  "address": "0x0F9A0e7071B7B21bc7a8514DA2cd251bc1FF0725",
+  "label": "Lido Emergency Brakes: Base",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 56,
+  "address": "0xC2b778fCc3FF311Cf1abBF4E53880277bfD14C8f",
+  "label": "Lido Emergency Brakes: BSC",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 5000,
+  "address": "0xa8579D42E34398267dE16e6eeeCdb7ED0EFF953C",
+  "label": "Lido Emergency Brakes: Mantle",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 324,
+  "address": "0x0D7F0A811978B3B62CbfF4EF6149B5909EAcfE94",
+  "label": "Lido Emergency Brakes: ZKSync",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 534352,
+  "address": "0xF580753E334687C0d6b88EF563a258f048384Ee6",
+  "label": "Lido Emergency Brakes: Scroll",
+  "source": "https://docs.lido.fi/multisigs/emergency-brakes"
+ },
+ {
+  "chainId": 1,
+  "address": "0x12a43b049A7D330cB8aEAB5113032D18AE9a9030",
+  "label": "Lido LEGO Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xe2A682A9722354D825d1BbDF372cC86B2ea82c8C",
+  "label": "Lido Rewards Share Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x98be4a407Bff0c125e25fBE9Eb1165504349c37d",
+  "label": "Lido Relay Maintenance Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x834560F580764Bc2e0B16925F8bF229bb00cB759",
+  "label": "Lido TRP Association Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xa02FC823cCE0D016bD7e17ac684c9abAb2d6D647",
+  "label": "Lido Treasury Management Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x5181d5D56Af4f823b96FE05f062D7a09761a5a53",
+  "label": "Lido Gas Supply Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x08637515E85A4633E23dfc7861e2A9f53af640f7",
+  "label": "Lido Simple DVT Module Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x87D93d9B2C672bf9c9642d853a8682546a5012B5",
+  "label": "Lido LOL Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xf6F0732c1e9971497342C295141566E6F1A31e96",
+  "label": "Lido LOL DAO Asset Treasury",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xC52fC3081123073078698F1EAc2f1Dc7Bd71880f",
+  "label": "Lido Community Staking Module Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x13600b9AEE86f8254969918B1E9ae6ea091b8727",
+  "label": "Lido Delegate Oversight Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x95B521B4F55a447DB89f6a27f951713fC2035f3F",
+  "label": "Lido Labs BORG Foundation",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x55897893c19e4B0c52731a3b7C689eC417005Ad6",
+  "label": "Lido Ecosystem BORG Foundation",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x8B7854488Fde088d686Ea672B6ba1A5242515f45",
+  "label": "Lido DG Emergency Activation Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xC7792b3F2B399bB0EdF53fECDceCeB97FBEB18AF",
+  "label": "Lido DG Emergency Execution Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xFFe21561251c49AdccFad065C94Fb4931dF49081",
+  "label": "Lido DG Reseal Committee",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0xC18F11735C6a1941431cCC5BcF13AF0a052A5022",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 42161,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 42161,
+  "address": "0xC18F11735C6a1941431cCC5BcF13AF0a052A5022",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 42161,
+  "address": "0x1840c4D81d2C50B603da5391b6A24c1cD62D0B56",
+  "label": "Lido LOL ARB Token Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 42161,
+  "address": "0xD97221065E826167A2cFE3307972c0D42200fDB4",
+  "label": "Lido LOL Arbitrum LTIPP Grant Token Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 8453,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 8453,
+  "address": "0x4f793e5d1d71dbbcEE34E39A5aD3c6bA5b11e935",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 56,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 56,
+  "address": "0xC18F11735C6a1941431cCC5BcF13AF0a052A5022",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 100,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 57073,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 59144,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 5000,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 143,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 10,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 10,
+  "address": "0x75483CE83100890c6bf1718c26052cE44e0F2839",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 10,
+  "address": "0x91cE2F083d59B832f95f90aA0997168ae051a98A",
+  "label": "Lido LOL OP Token Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 9745,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 137,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 137,
+  "address": "0xC18F11735C6a1941431cCC5BcF13AF0a052A5022",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 534352,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 534352,
+  "address": "0xC18F11735C6a1941431cCC5BcF13AF0a052A5022",
+  "label": "Lido LOL AAVE Incentives Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 130,
+  "address": "0xFc832dA3D688352C0aB1A32136c7fABbB16d66E6",
+  "label": "Lido LOL Assets Distribution Multisig",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 324,
+  "address": "0x65B05f4fCa066316383b0FE196C76C873a4dFD02",
+  "label": "Lido LOL Assets Distribution Multisig (zkSync)",
+  "source": "https://docs.lido.fi/multisigs/committees"
+ },
+ {
+  "chainId": 1,
+  "address": "0x1Db92e2EeBC8E0c075a02BeA49a2935BcD2dFCF4",
+  "label": "Bybit cold wallet (drained 2025-02-21)",
+  "source": "https://nccgroup.com/sg/research-blog/in-depth-technical-analysis-of-the-bybit-hack"
+ },
+ {
+  "chainId": 1,
+  "address": "0x4f3a120E72C76c22ae802D129F599BFDbc31cb81",
+  "label": "Wintermute Safe (Ethereum)",
+  "source": "https://rekt.news/wintermute-rekt"
+ },
+ {
+  "chainId": 10,
+  "address": "0x4f3a120E72C76c22ae802D129F599BFDbc31cb81",
+  "label": "Same address on Optimism, deployed by the attacker (20M OP)",
+  "source": "https://rekt.news/wintermute-rekt"
+ },
+ {
+  "chainId": 1,
+  "address": "0xaA5cD05f6B62C3af58AE9c4F3F7A2aCC2Cdc2Cc7",
+  "label": "ENS DAO Security Council multisig",
+  "source": "https://discuss.ens.domains/t/temp-check-set-primary-names-for-core-dao-addresses/21432/15"
+ },
+ {
+  "chainId": 1,
+  "address": "0x0B00b3227A5F3df3484f03990A87e02EbaD2F888",
+  "label": "SafeDAO Treasury",
+  "source": "https://safefoundation.notion.site/Treasury-overview-333a8a34f3b881448969c637164cb835"
+ },
+ {
+  "chainId": 1,
+  "address": "0xd28b432f06cb64692379758b88b5fcdfc4f56922",
+  "label": "Joint SafeDAO-GnosisDAO Treasury (2-of-2)",
+  "source": "https://safefoundation.notion.site/Treasury-overview-333a8a34f3b881448969c637164cb835"
+ }
+]

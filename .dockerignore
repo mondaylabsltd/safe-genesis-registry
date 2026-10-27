@@ -1,0 +1,7 @@
+target
+contracts
+verify
+genesis-cf
+**/node_modules
+.git
+.env

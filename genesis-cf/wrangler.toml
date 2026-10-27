@@ -1,0 +1,36 @@
+# Cloudflare Workers deployment for the Safe Genesis Registry service.
+#
+# Deployment-neutral: no resource ids, no per-deployment addresses. Configure
+# per deployment:
+#
+#   npx wrangler secret put REGISTRY_ADDRESS   # required: the registry (same address on every chain)
+#   npx wrangler secret put PRIVATE_KEY        # optional: sponsored imports; read-only without it
+#   npx wrangler deploy
+#
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN # optional: operator alerts
+#   npx wrangler secret put TELEGRAM_CHAT_ID
+#
+# Optional vars: HOME_CHAIN_ID (default 100, Gnosis), MAX_FEE_WEI,
+# MIN_SPONSOR_BALANCE_WEI, CHAINS (a JSON array replacing the built-in chain
+# table, genesis-rules/data/chains.json).
+# Local development: copy .dev.vars.example to .dev.vars, then `npx wrangler dev`.
+
+name = "safe-genesis"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-05-01"
+keep_vars = true
+
+[build]
+command = "sh build.sh"
+
+# The maintenance tick: re-arms a lost submitter alarm, evaluates alerts.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[durable_objects.bindings]]
+name = "SUBMITTER"
+class_name = "SubmitterDo"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SubmitterDo"]

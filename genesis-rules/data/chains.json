@@ -1,0 +1,110 @@
+[
+ {
+  "chainId": 100,
+  "name": "Gnosis",
+  "rpcs": [
+   "https://rpc.gnosischain.com",
+   "https://gnosis-rpc.publicnode.com"
+  ],
+  "txService": "https://api.safe.global/tx-service/gno"
+ },
+ {
+  "chainId": 1,
+  "name": "Ethereum",
+  "rpcs": [
+   "https://eth.drpc.org",
+   "https://ethereum-rpc.publicnode.com"
+  ],
+  "txService": "https://api.safe.global/tx-service/eth"
+ },
+ {
+  "chainId": 8453,
+  "name": "Base",
+  "rpcs": [
+   "https://base-rpc.publicnode.com",
+   "https://mainnet.base.org"
+  ],
+  "txService": "https://api.safe.global/tx-service/base"
+ },
+ {
+  "chainId": 10,
+  "name": "OP Mainnet",
+  "rpcs": [
+   "https://optimism-rpc.publicnode.com",
+   "https://mainnet.optimism.io"
+  ],
+  "txService": "https://api.safe.global/tx-service/oeth"
+ },
+ {
+  "chainId": 42161,
+  "name": "Arbitrum One",
+  "rpcs": [
+   "https://arbitrum-one-rpc.publicnode.com",
+   "https://arb1.arbitrum.io/rpc"
+  ],
+  "txService": "https://api.safe.global/tx-service/arb1"
+ },
+ {
+  "chainId": 137,
+  "name": "Polygon",
+  "rpcs": [
+   "https://polygon-bor-rpc.publicnode.com",
+   "https://polygon.drpc.org"
+  ],
+  "txService": "https://api.safe.global/tx-service/pol"
+ },
+ {
+  "chainId": 56,
+  "name": "BNB Chain",
+  "rpcs": [
+   "https://bsc-rpc.publicnode.com",
+   "https://bsc.drpc.org"
+  ],
+  "txService": "https://api.safe.global/tx-service/bnb"
+ },
+ {
+  "chainId": 43114,
+  "name": "Avalanche",
+  "rpcs": [
+   "https://avalanche-c-chain-rpc.publicnode.com",
+   "https://api.avax.network/ext/bc/C/rpc"
+  ],
+  "txService": "https://api.safe.global/tx-service/avax"
+ },
+ {
+  "chainId": 59144,
+  "name": "Linea",
+  "rpcs": [
+   "https://linea-rpc.publicnode.com",
+   "https://rpc.linea.build"
+  ],
+  "txService": "https://api.safe.global/tx-service/linea"
+ },
+ {
+  "chainId": 534352,
+  "name": "Scroll",
+  "rpcs": [
+   "https://scroll-rpc.publicnode.com",
+   "https://rpc.scroll.io"
+  ],
+  "txService": "https://api.safe.global/tx-service/scr"
+ },
+ {
+  "chainId": 130,
+  "name": "Unichain",
+  "rpcs": [
+   "https://unichain-rpc.publicnode.com",
+   "https://mainnet.unichain.org"
+  ],
+  "txService": "https://api.safe.global/tx-service/unichain"
+ },
+ {
+  "chainId": 42220,
+  "name": "Celo",
+  "rpcs": [
+   "https://celo-rpc.publicnode.com",
+   "https://forno.celo.org"
+  ],
+  "txService": "https://api.safe.global/tx-service/celo"
+ }
+]

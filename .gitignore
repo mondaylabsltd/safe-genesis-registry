@@ -1,0 +1,9 @@
+target/
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+.env
+.DS_Store
+
+# Personal Safe{Wallet} export: addresses only, no names, but still yours.
+contracts/test/data/user-safes.json
