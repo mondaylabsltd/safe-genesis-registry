@@ -169,7 +169,13 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 ```
 
 Anyone can deploy it on a new chain and gets the same contract at the same
-address. Not yet deployed anywhere.
+address.
+
+| Network | Address | Deployment |
+| --- | --- | --- |
+| Arc Testnet (5042002) | `0xdA88357C2eB85e7e0515B1122a28befd6Dc8fb89` | tx `0x180019e760a9727356fa16490001a099fd92282c56f534d84a2d7d9eb7415854`, block 69295041; runtime code identical to this repo's build |
+
+No mainnet deployment yet.
 
 ## Development
 
