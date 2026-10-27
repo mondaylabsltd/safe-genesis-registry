@@ -8,6 +8,7 @@ use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{self, Evidence, Lane, Sponsorship, Task, Usage};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
+use genesis_rules::proposal::{self, Members, Outcome, PasskeyApproval, Proposal, SafeTx};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -79,6 +80,40 @@ impl Edge {
                 }
             }
             (Method::Get, ["api", "task", id]) => self.do_get(&format!("/task?id={id}")).await,
+            (Method::Post, ["api", "proposals"]) => {
+                let declared = req.headers().get("content-length")?.and_then(|l| l.parse::<usize>().ok());
+                if declared.is_some_and(|l| l > MAX_BODY) {
+                    return error_response(413, "request body too large");
+                }
+                let body = req.bytes().await?;
+                if body.len() > MAX_BODY {
+                    return error_response(413, "request body too large");
+                }
+                match serde_json::from_slice::<ProposeRequest>(&body) {
+                    Ok(r) => {
+                        let (status, body) = self.propose(r).await?;
+                        json_response(status, body)
+                    }
+                    Err(e) => error_response(400, &format!("invalid request: {e}")),
+                }
+            }
+            (Method::Get, ["api", "proposals", safe]) => {
+                let safe = parse_address(safe)?;
+                let Some(chain) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| self.config.chain(id)) else {
+                    return error_response(400, "chainId is required and must be a configured chain");
+                };
+                let (status, body) = self.list_proposals(chain, safe).await?;
+                json_response(status, body)
+            }
+            (Method::Get, ["api", "proposals", safe, hash]) => {
+                let safe = parse_address(safe)?;
+                let hash: genesis_rules::B256 = hash.parse().map_err(|_| worker::Error::RustError("not a hash".into()))?;
+                let Some(chain) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| self.config.chain(id)) else {
+                    return error_response(400, "chainId is required and must be a configured chain");
+                };
+                let (status, body) = self.get_proposal(chain, safe, hash).await?;
+                json_response(status, body)
+            }
             _ => error_response(404, "not found"),
         }
     }
@@ -299,6 +334,96 @@ impl Edge {
         Ok(import::sponsorship(evidence, usage))
     }
 
+    // -- the proposal mailbox -------------------------------------------------------------
+
+    /// A genesis the caller sent, kept only if it derives `safe` on this chain's factory.
+    async fn derives(&self, chain: &ChainConfig, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
+        let g = g?;
+        let code = registry::proxy_code(&Rpc::new(chain), g.factory).await?;
+        (g.address(&code) == safe).then_some(g)
+    }
+
+    async fn stored_genesis(&self, safe: Address) -> Option<Genesis> {
+        let v = self.do_json(&format!("/proposal/genesis?safe={safe}")).await.ok()?;
+        serde_json::from_value(v).ok().flatten()
+    }
+
+    async fn members(&self, chain: &ChainConfig, safe: Address, known: Option<Genesis>) -> std::result::Result<Members, (u16, Value)> {
+        let known = match known {
+            Some(g) => Some(g),
+            None => self.stored_genesis(safe).await,
+        };
+        match registry::members(&self.config, chain, safe, known.as_ref()).await {
+            Ok(Some(m)) => Ok(m),
+            Ok(None) => Err(view::unknown_safe()),
+            Err(e) => Err(view::error(502, &e.to_string())),
+        }
+    }
+
+    /// Check the approval as the chain would, then merge it where writes to
+    /// the mailbox are serialized (the Durable Object).
+    async fn propose(&self, r: ProposeRequest) -> Result<(u16, Value)> {
+        let Some(chain) = self.config.chain(r.chain_id) else {
+            return Ok(view::error(400, "chainId is not a configured chain"));
+        };
+        if let Some(detail) = r.safe_tx.refusal() {
+            return Ok(view::proposal_refused(&proposal::Refusal::Transaction { detail: detail.into() }));
+        }
+        let mut r = r;
+        r.genesis = self.derives(chain, r.safe, r.genesis.take()).await;
+        let members = match self.members(chain, r.safe, r.genesis.clone()).await {
+            Ok(m) => m,
+            Err(answer) => return Ok(answer),
+        };
+        if r.safe_tx.nonce < members.nonce {
+            return Ok(view::proposal_refused(&proposal::Refusal::Transaction {
+                detail: format!("nonce {} is used already (the Safe is at {})", r.safe_tx.nonce, members.nonce),
+            }));
+        }
+        let Some(code) = registry::proxy_code(&Rpc::new(chain), r.approval.owner_genesis.factory).await else {
+            return Ok(view::error(502, "the owner's factory did not answer proxyCreationCode()"));
+        };
+        let hash = r.safe_tx.hash(r.chain_id, r.safe);
+        if let Err(error) =
+            proposal::verify_approval(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded())
+        {
+            return Ok(view::proposal_refused(&proposal::Refusal::Approval { error }));
+        }
+        let merged: MergeAnswer = self.do_post("/proposal/merge", &r).await?;
+        Ok(match merged {
+            MergeAnswer { proposal: Some(p), outcome: Some(o), .. } => view::proposal_submitted(o, &p),
+            MergeAnswer { refusal: Some(refusal), .. } => view::proposal_refused(&refusal),
+            _ => view::error(500, "the mailbox answered nothing"),
+        })
+    }
+
+    async fn list_proposals(&self, chain: &ChainConfig, safe: Address) -> Result<(u16, Value)> {
+        let members = match self.members(chain, safe, None).await {
+            Ok(m) => m,
+            Err(answer) => return Ok(answer),
+        };
+        let list: Vec<Proposal> = serde_json::from_value(
+            self.do_json(&format!("/proposal/list?chainId={}&safe={safe}", chain.chain_id)).await?,
+        )
+        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        Ok(view::proposals(chain.chain_id, safe, &members, &list))
+    }
+
+    async fn get_proposal(&self, chain: &ChainConfig, safe: Address, hash: genesis_rules::B256) -> Result<(u16, Value)> {
+        let members = match self.members(chain, safe, None).await {
+            Ok(m) => m,
+            Err(answer) => return Ok(answer),
+        };
+        let found: Option<Proposal> = serde_json::from_value(
+            self.do_json(&format!("/proposal/get?chainId={}&hash={hash}", chain.chain_id)).await?,
+        )
+        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        Ok(match found {
+            Some(p) if p.safe == safe => view::proposal(&members, &p),
+            _ => view::error(404, "no such proposal"),
+        })
+    }
+
     // -- durable object -----------------------------------------------------------------
 
     fn submitter(&self) -> Result<Stub> {
@@ -391,6 +516,28 @@ struct ImportRequest {
     genesis: Option<Genesis>,
     /// An owner asking for a Safe deployed nowhere yet to be sponsored.
     owner_proof: Option<OwnerProof>,
+}
+
+/// `POST /api/proposals`: a transaction and one owner's approval of it.
+#[derive(Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeRequest {
+    pub chain_id: u64,
+    pub safe: Address,
+    pub safe_tx: SafeTx,
+    pub approval: PasskeyApproval,
+    /// The multisig's genesis, for one whose record has not landed yet.
+    #[serde(default)]
+    pub genesis: Option<Genesis>,
+}
+
+/// The Durable Object's answer to a merge.
+#[derive(Deserialize, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeAnswer {
+    pub proposal: Option<Proposal>,
+    pub outcome: Option<Outcome>,
+    pub refusal: Option<proposal::Refusal>,
 }
 
 fn parse_address(s: &str) -> Result<Address> {

@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use genesis_rules::Address;
+use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{Lane, Task};
+use genesis_rules::proposal::{self, Outcome, PasskeyApproval, Proposal, Refusal, SafeTx};
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub struct Store {
@@ -32,7 +34,19 @@ impl Store {
              CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks (status, updated);
              CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (created);
              CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, sent_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS proposals (
+                 chain_id INTEGER NOT NULL,
+                 hash     TEXT NOT NULL,
+                 safe     TEXT NOT NULL,
+                 nonce    INTEGER NOT NULL,
+                 created  INTEGER NOT NULL,
+                 updated  INTEGER NOT NULL,
+                 payload  TEXT NOT NULL,
+                 PRIMARY KEY (chain_id, hash)
+             );
+             CREATE INDEX IF NOT EXISTS idx_proposals_safe ON proposals (chain_id, safe, nonce);
+             CREATE TABLE IF NOT EXISTS mailbox_geneses (safe TEXT PRIMARY KEY, payload TEXT NOT NULL);",
         )?;
         // Tables made before the owner lane existed lack its column.
         let has: i64 =
@@ -81,6 +95,79 @@ impl Store {
         let owner = owner.map(|o| o.to_string().to_lowercase());
         let sql = format!("SELECT count(*) FROM tasks WHERE created >= ?1 AND {lane} AND (?2 IS NULL OR proved_by = ?2)");
         self.with(|c| c.query_row(&sql, params![ms, owner], |r| r.get::<_, i64>(0))).map(|n| n as u32)
+    }
+
+    // -- the proposal mailbox ------------------------------------------------------
+
+    pub fn proposal(&self, chain_id: u64, hash: &str) -> R<Option<Proposal>> {
+        self.with(|c| proposal_with(c, chain_id, hash))
+    }
+
+    /// Merge an approval the caller verified, in one locked step, so two owners
+    /// approving at once both count.
+    pub fn merge_proposal(
+        &self,
+        chain_id: u64,
+        safe: Address,
+        safe_tx: SafeTx,
+        approval: PasskeyApproval,
+        now_ms: u64,
+    ) -> R<Result<(Proposal, Outcome), Refusal>> {
+        self.with(|c| {
+            let hash = safe_tx.hash(chain_id, safe).to_string();
+            let existing = proposal_with(c, chain_id, &hash)?;
+            let merged = proposal::merge(existing, chain_id, safe, safe_tx, approval, now_ms);
+            if let Ok((p, outcome)) = &merged
+                && *outcome != Outcome::Unchanged
+            {
+                c.execute(
+                    "INSERT INTO proposals (chain_id, hash, safe, nonce, created, updated, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(chain_id, hash) DO UPDATE SET updated = excluded.updated, payload = excluded.payload",
+                    params![
+                        chain_id as i64,
+                        hash.to_lowercase(),
+                        safe.to_string().to_lowercase(),
+                        proposal::nonce_key(p.safe_tx.nonce),
+                        p.created_ms as i64,
+                        p.updated_ms as i64,
+                        serde_json::to_string(p).expect("proposal serializes"),
+                    ],
+                )?;
+            }
+            Ok(merged)
+        })
+    }
+
+    /// A genesis the mailbox accepted for a Safe (it derived the address).
+    pub fn mailbox_genesis(&self, safe: Address) -> R<Option<Genesis>> {
+        self.with(|c| {
+            let payload: Option<String> = c
+                .query_row("SELECT payload FROM mailbox_geneses WHERE safe = ?1", params![safe.to_string().to_lowercase()], |r| r.get(0))
+                .optional()?;
+            Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
+        })
+    }
+
+    pub fn keep_mailbox_genesis(&self, safe: Address, g: &Genesis) -> R<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO mailbox_geneses (safe, payload) VALUES (?1, ?2) ON CONFLICT(safe) DO NOTHING",
+                params![safe.to_string().to_lowercase(), serde_json::to_string(g).expect("genesis serializes")],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// A Safe's proposals on a chain changed since `since_ms`, by nonce.
+    pub fn proposals(&self, chain_id: u64, safe: Address, since_ms: i64) -> R<Vec<Proposal>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT payload FROM proposals WHERE chain_id = ?1 AND safe = ?2 AND updated >= ?3
+                 ORDER BY nonce ASC, created ASC LIMIT 100",
+            )?;
+            let rows = st.query_map(params![chain_id as i64, safe.to_string().to_lowercase(), since_ms], |r| r.get::<_, String>(0))?;
+            Ok(rows.filter_map(|r| r.ok()).filter_map(|p| serde_json::from_str(&p).ok()).collect())
+        })
     }
 
     fn tasks(&self, sql: &str, args: impl rusqlite::Params) -> R<Vec<Task>> {
@@ -170,4 +257,15 @@ fn save_with(c: &Connection, task: &Task) -> R<()> {
         ],
     )
     .map(|_| ())
+}
+
+fn proposal_with(c: &Connection, chain_id: u64, hash: &str) -> R<Option<Proposal>> {
+    let payload: Option<String> = c
+        .query_row(
+            "SELECT payload FROM proposals WHERE chain_id = ?1 AND hash = ?2",
+            params![chain_id as i64, hash.to_lowercase()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
 }

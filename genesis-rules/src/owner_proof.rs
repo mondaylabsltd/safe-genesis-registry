@@ -98,11 +98,25 @@ impl std::fmt::Display for ProofError {
     }
 }
 
-/// A P-256 public key, affine coordinates.
+/// A P-256 public key, affine coordinates, and the owner it signs as: the
+/// shared signer it was `configure`d on, or the signer the factory creates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Passkey {
     pub x: U256,
     pub y: U256,
+    pub signer: Address,
+}
+
+impl Passkey {
+    /// Whether this key made `signature` over `message` (ECDSA over SHA-256).
+    pub fn verifies(&self, message: &[u8], signature: &Signature) -> bool {
+        let point = EncodedPoint::from_affine_coordinates(
+            &self.x.to_be_bytes::<32>().into(),
+            &self.y.to_be_bytes::<32>().into(),
+            false,
+        );
+        VerifyingKey::from_encoded_point(&point).is_ok_and(|vk| vk.verify(message, signature).is_ok())
+    }
 }
 
 /// The passkeys that control a wallet at its creation, each on its own: a
@@ -130,19 +144,14 @@ pub fn passkeys(genesis: &Genesis, known: &KnownContracts) -> Result<Vec<Passkey
             let c = exact::<ISafeWebAuthnSharedSigner::configureCall>(&leg.data)
                 .ok_or_else(|| not("bad configure".into()))?;
             if setup.owners.contains(&leg.to) {
-                keys.push(Passkey {
-                    x: c.signer.x,
-                    y: c.signer.y,
-                });
+                keys.push(Passkey { x: c.signer.x, y: c.signer.y, signer: leg.to });
             }
         } else if leg.operation == 0 && leg.to == passkey::SIGNER_FACTORY {
             let c = exact::<ISafeWebAuthnSignerFactory::createSignerCall>(&leg.data)
                 .ok_or_else(|| not("bad createSigner".into()))?;
-            if setup
-                .owners
-                .contains(&passkey::signer_address(c.x, c.y, U256::from(c.verifiers)))
-            {
-                keys.push(Passkey { x: c.x, y: c.y });
+            let signer = passkey::signer_address(c.x, c.y, U256::from(c.verifiers));
+            if setup.owners.contains(&signer) {
+                keys.push(Passkey { x: c.x, y: c.y, signer });
             }
         }
     }
@@ -177,18 +186,8 @@ pub fn verify(
         challenge(safe),
     )?;
     let signature = parse_signature(&proof.signature)?;
-    for key in keys {
-        let point = EncodedPoint::from_affine_coordinates(
-            &key.x.to_be_bytes::<32>().into(),
-            &key.y.to_be_bytes::<32>().into(),
-            false,
-        );
-        let Ok(vk) = VerifyingKey::from_encoded_point(&point) else {
-            continue;
-        };
-        if vk.verify(&message, &signature).is_ok() {
-            return Ok(proof.owner);
-        }
+    if keys.iter().any(|key| key.verifies(&message, &signature)) {
+        return Ok(proof.owner);
     }
     Err(ProofError::NoKeyMatches)
 }
@@ -229,7 +228,7 @@ fn assertion_message(
 
 /// `r ‖ s` or DER; a high `s` is accepted (P-256 verifiers on chain accept it
 /// too, and malleability cannot matter for a request that is write-once).
-fn parse_signature(bytes: &[u8]) -> Result<Signature, ProofError> {
+pub(crate) fn parse_signature(bytes: &[u8]) -> Result<Signature, ProofError> {
     let sig = if bytes.len() == 64 {
         Signature::from_slice(bytes)
     } else {

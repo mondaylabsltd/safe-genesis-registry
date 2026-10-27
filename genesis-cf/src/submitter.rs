@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use genesis_rules::import::{Status, Task};
+use genesis_rules::proposal;
 use genesis_rules::sentinel::{self, Facts};
 use serde::Deserialize;
 use serde_json::json;
@@ -105,6 +106,61 @@ impl DurableObject for SubmitterDo {
                 Response::from_json(&stats)
             }
             "/maintain" => Response::from_json(&self.maintain().await?),
+            "/proposal/merge" => {
+                let r: crate::edge::ProposeRequest = req.json().await?;
+                let hash = r.safe_tx.hash(r.chain_id, r.safe);
+                if let Some(g) = &r.genesis {
+                    // The edge kept it only if it derives the Safe's address.
+                    self.sql().exec(
+                        "INSERT INTO mailbox_geneses (safe, payload) VALUES (?1, ?2) ON CONFLICT(safe) DO NOTHING",
+                        vec![
+                            SqlStorageValue::from(r.safe.to_string().to_lowercase()),
+                            SqlStorageValue::from(serde_json::to_string(g).map_err(|e| worker::Error::RustError(e.to_string()))?),
+                        ],
+                    )?;
+                }
+                let existing = self.proposal(r.chain_id, &hash.to_string())?;
+                let answer = match proposal::merge(existing, r.chain_id, r.safe, r.safe_tx, r.approval, now_ms()) {
+                    Ok((p, outcome)) => {
+                        if outcome != proposal::Outcome::Unchanged {
+                            self.save_proposal(&p)?;
+                        }
+                        crate::edge::MergeAnswer { proposal: Some(p), outcome: Some(outcome), refusal: None }
+                    }
+                    Err(refusal) => crate::edge::MergeAnswer { refusal: Some(refusal), ..Default::default() },
+                };
+                Response::from_json(&answer)
+            }
+            "/proposal/genesis" => {
+                let rows: Vec<PayloadRow> = self
+                    .sql()
+                    .exec("SELECT payload FROM mailbox_geneses WHERE safe = ?1", vec![SqlStorageValue::from(param("safe").to_lowercase())])?
+                    .to_array()?;
+                let g: Option<genesis_rules::genesis::Genesis> = rows.into_iter().next().and_then(|r| serde_json::from_str(&r.payload).ok());
+                Response::from_json(&g)
+            }
+            "/proposal/get" => {
+                let chain_id: u64 = param("chainId").parse().unwrap_or(0);
+                Response::from_json(&self.proposal(chain_id, &param("hash").to_lowercase())?)
+            }
+            "/proposal/list" => {
+                let chain_id: u64 = param("chainId").parse().unwrap_or(0);
+                let since = now_ms().saturating_sub(proposal::KEEP_MS) as i64;
+                let rows: Vec<PayloadRow> = self
+                    .sql()
+                    .exec(
+                        "SELECT payload FROM proposals WHERE chain_id = ?1 AND safe = ?2 AND updated >= ?3
+                         ORDER BY nonce ASC, created ASC LIMIT 100",
+                        vec![
+                            SqlStorageValue::from(chain_id as i64),
+                            SqlStorageValue::from(param("safe").to_lowercase()),
+                            SqlStorageValue::from(since),
+                        ],
+                    )?
+                    .to_array()?;
+                let list: Vec<proposal::Proposal> = rows.into_iter().filter_map(|r| serde_json::from_str(&r.payload).ok()).collect();
+                Response::from_json(&list)
+            }
             _ => Ok(Response::from_json(&json!({"error": "not found"}))?.with_status(404)),
         }
     }
@@ -216,7 +272,19 @@ impl SubmitterDo {
              CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks (status, updated);
              CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (created);
              CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, sent_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS proposals (
+                 chain_id INTEGER NOT NULL,
+                 hash     TEXT NOT NULL,
+                 safe     TEXT NOT NULL,
+                 nonce    INTEGER NOT NULL,
+                 created  INTEGER NOT NULL,
+                 updated  INTEGER NOT NULL,
+                 payload  TEXT NOT NULL,
+                 PRIMARY KEY (chain_id, hash)
+             );
+             CREATE INDEX IF NOT EXISTS idx_proposals_safe ON proposals (chain_id, safe, nonce);
+             CREATE TABLE IF NOT EXISTS mailbox_geneses (safe TEXT PRIMARY KEY, payload TEXT NOT NULL);",
             None,
         )?;
         // Tables made before the owner lane existed lack its column.
@@ -244,6 +312,35 @@ impl SubmitterDo {
                 SqlStorageValue::from(task.updated_ms as i64),
                 SqlStorageValue::from(payload),
                 task.proved_by.map(|o| SqlStorageValue::from(o.to_string().to_lowercase())).unwrap_or(SqlStorageValue::Null),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn proposal(&self, chain_id: u64, hash: &str) -> Result<Option<proposal::Proposal>> {
+        let rows: Vec<PayloadRow> = self
+            .sql()
+            .exec(
+                "SELECT payload FROM proposals WHERE chain_id = ?1 AND hash = ?2",
+                vec![SqlStorageValue::from(chain_id as i64), SqlStorageValue::from(hash.to_lowercase())],
+            )?
+            .to_array()?;
+        Ok(rows.into_iter().next().and_then(|r| serde_json::from_str(&r.payload).ok()))
+    }
+
+    fn save_proposal(&self, p: &proposal::Proposal) -> Result<()> {
+        let payload = serde_json::to_string(p).map_err(|e| worker::Error::RustError(e.to_string()))?;
+        self.sql().exec(
+            "INSERT INTO proposals (chain_id, hash, safe, nonce, created, updated, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(chain_id, hash) DO UPDATE SET updated = excluded.updated, payload = excluded.payload",
+            vec![
+                SqlStorageValue::from(p.chain_id as i64),
+                SqlStorageValue::from(p.safe_tx_hash.to_string().to_lowercase()),
+                SqlStorageValue::from(p.safe.to_string().to_lowercase()),
+                SqlStorageValue::from(proposal::nonce_key(p.safe_tx.nonce)),
+                SqlStorageValue::from(p.created_ms as i64),
+                SqlStorageValue::from(p.updated_ms as i64),
+                SqlStorageValue::from(payload),
             ],
         )?;
         Ok(())

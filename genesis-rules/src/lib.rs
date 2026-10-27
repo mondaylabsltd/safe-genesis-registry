@@ -17,6 +17,8 @@
 //! - [`passkey`] — where Safe's passkey signer factory puts a signer.
 //! - [`owner_proof`] — an owner's passkey asking for a Safe deployed nowhere
 //!   yet to be recorded: what the service needs to sponsor it.
+//! - [`proposal`] — the proposal mailbox: Safe transactions waiting for
+//!   their owners' passkey approvals, each checked as the chain would.
 //! - [`replay`] — whether replaying a genesis on a given chain recreates the
 //!   same wallet: the dependencies it touches and the verdict.
 //! - [`drift`] — a Safe's original members against its current ones.
@@ -40,6 +42,7 @@ pub mod known;
 pub mod lookup;
 pub mod owner_proof;
 pub mod passkey;
+pub mod proposal;
 pub mod replay;
 pub mod resolve;
 pub mod sentinel;

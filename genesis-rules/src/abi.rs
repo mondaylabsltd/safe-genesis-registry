@@ -61,6 +61,7 @@ alloy::sol! {
         ) external;
         function getOwners() external view returns (address[]);
         function getThreshold() external view returns (uint256);
+        function nonce() external view returns (uint256);
     }
 
     /// Setup hooks real Safes are created with.

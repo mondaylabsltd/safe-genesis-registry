@@ -8,6 +8,7 @@ use futures_util::future::join_all;
 use genesis_rules::genesis::{self, Genesis, Recorded};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::lookup::{ChainAnswer, Lookup};
+use genesis_rules::proposal::{self, Members};
 use genesis_rules::replay::{self, OwnerFact, SafeState, TargetFacts, addresses_to_read, plan};
 use genesis_rules::{Address, B256, Bytes};
 use serde_json::{Value, json};
@@ -137,4 +138,45 @@ pub async fn safe_state(chain: &ChainConfig, safe: Address) -> RpcResult<SafeSta
         fallback_handler: word_address(ok(3)?)?,
         guard: word_address(ok(4)?)?,
     })
+}
+
+/// Who may approve `safe`'s transactions on `chain`, and from which nonce:
+/// the deployed Safe's owners, threshold and nonce, or, where it has no code,
+/// what its genesis creates there. `None` when it is neither deployed there
+/// nor recorded anywhere.
+///
+/// `known` is a genesis the caller holds for it (one the mailbox stored, or one
+/// sent with a proposal): used only when the registry has none yet, and only
+/// if it derives `safe` on this chain's factory — so a multisig created a
+/// moment ago, its record still on its way, is not refused.
+pub async fn members(config: &Config, chain: &ChainConfig, safe: Address, known: Option<&Genesis>) -> RpcResult<Option<Members>> {
+    let rpc = Rpc::new(chain);
+    if rpc.code_hash(safe).await?.is_some() {
+        let a = rpc
+            .batch(&[
+                call(safe, &genesis::get_owners_call()),
+                call(safe, &genesis::get_threshold_call()),
+                call(safe, &proposal::nonce_call()),
+            ])
+            .await?;
+        let ok = |i: usize| a[i].as_ref().map_err(Clone::clone);
+        return Ok(Some(Members {
+            deployed: true,
+            owners: genesis::decode_owners(&bytes(ok(0)?)?).map_err(|_| RpcError::InvalidResponse)?,
+            threshold: genesis::decode_threshold(&bytes(ok(1)?)?).map_err(|_| RpcError::InvalidResponse)?,
+            nonce: proposal::decode_nonce(&bytes(ok(2)?)?).map_err(|_| RpcError::InvalidResponse)?,
+        }));
+    }
+    let l = lookup(config, safe).await;
+    match l.record {
+        Some((_, r)) if l.verified == Some(true) => Ok(proposal::genesis_members(&r.genesis)),
+        Some(_) => Err(RpcError::InvalidResponse),
+        None => match known {
+            Some(g) if proxy_code(&rpc, g.factory).await.is_some_and(|code| g.address(&code) == safe) => {
+                Ok(proposal::genesis_members(g))
+            }
+            _ if l.unreachable.is_empty() => Ok(None),
+            _ => Err(RpcError::InvalidResponse),
+        },
+    }
 }

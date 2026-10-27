@@ -1,6 +1,7 @@
 //! The API's response bodies. Both shells serve exactly these, so a client
 //! cannot tell (and need not care) which one answered.
 
+use crate::proposal::{Members, Outcome, Proposal, Refusal as ProposalRefusal};
 use alloy::primitives::Address;
 use serde_json::{Value, json};
 
@@ -140,4 +141,34 @@ pub fn import_refused(safe: Address, refusal: &Refusal) -> (u16, Value) {
 
 pub fn error(status: u16, message: &str) -> (u16, Value) {
     (status, json!({"error": message}))
+}
+
+// -- the proposal mailbox -------------------------------------------------------
+
+/// A Safe's proposals on one chain, with who may approve them there.
+pub fn proposals(chain_id: u64, safe: Address, members: &Members, list: &[Proposal]) -> (u16, Value) {
+    (200, json!({"chainId": chain_id, "safe": safe, "members": members, "proposals": list}))
+}
+
+pub fn proposal(members: &Members, p: &Proposal) -> (u16, Value) {
+    (200, json!({"chainId": p.chain_id, "safe": p.safe, "members": members, "proposal": p}))
+}
+
+pub fn proposal_submitted(outcome: Outcome, p: &Proposal) -> (u16, Value) {
+    let (status, word) = match outcome {
+        Outcome::Created => (201, "created"),
+        Outcome::Approved => (200, "approved"),
+        Outcome::Unchanged => (200, "unchanged"),
+    };
+    (status, json!({"status": word, "proposal": p}))
+}
+
+pub fn proposal_refused(refusal: &ProposalRefusal) -> (u16, Value) {
+    (422, json!({"refusal": refusal}))
+}
+
+/// The Safe is neither deployed on the chain nor recorded anywhere: nobody can
+/// say who its owners are there.
+pub fn unknown_safe() -> (u16, Value) {
+    error(404, "unknown Safe: it is not deployed on this chain and no genesis is recorded for it")
 }

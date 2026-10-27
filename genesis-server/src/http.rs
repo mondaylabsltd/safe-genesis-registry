@@ -15,6 +15,7 @@ use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{self, Evidence, Sponsorship, Task, Usage};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
+use genesis_rules::proposal::{self, Members, PasskeyApproval, SafeTx};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -79,6 +80,40 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                     import_safe(&app, body).await
                 }
                 (Method::GET, ["api", "task", id]) => task(&app, id),
+                (Method::POST, ["api", "proposals"]) => {
+                    if declared.is_some_and(|l| l > MAX_BODY) {
+                        return reply(413, json!({"error": "request body too large"}));
+                    }
+                    let Ok(body) = axum::body::to_bytes(req.into_body(), MAX_BODY).await else {
+                        return reply(413, json!({"error": "request body too large"}));
+                    };
+                    match serde_json::from_slice::<ProposeRequest>(&body) {
+                        Ok(r) => {
+                            let (status, body) = propose(&app, r).await;
+                            reply(status, body)
+                        }
+                        Err(e) => reply(400, json!({"error": format!("invalid request: {e}")})),
+                    }
+                }
+                (Method::GET, ["api", "proposals", safe]) => {
+                    let Ok(safe) = safe.parse::<Address>() else { return reply(400, json!({"error": "not an address"})) };
+                    let chain = query("chainId").and_then(|v| v.parse().ok()).and_then(|id| app.config.chain(id)).cloned();
+                    let Some(chain) = chain else {
+                        return reply(400, json!({"error": "chainId is required and must be a configured chain"}));
+                    };
+                    let (status, body) = list_proposals(&app, &chain, safe).await;
+                    reply(status, body)
+                }
+                (Method::GET, ["api", "proposals", safe, hash]) => {
+                    let Ok(safe) = safe.parse::<Address>() else { return reply(400, json!({"error": "not an address"})) };
+                    let Ok(hash) = hash.parse::<genesis_rules::B256>() else { return reply(400, json!({"error": "not a hash"})) };
+                    let chain = query("chainId").and_then(|v| v.parse().ok()).and_then(|id| app.config.chain(id)).cloned();
+                    let Some(chain) = chain else {
+                        return reply(400, json!({"error": "chainId is required and must be a configured chain"}));
+                    };
+                    let (status, body) = get_proposal(&app, &chain, safe, hash).await;
+                    reply(status, body)
+                }
                 _ => reply(404, json!({"error": "not found"})),
             }
         };
@@ -308,6 +343,96 @@ fn sponsorship(app: &App, evidence: &Evidence) -> Sponsorship {
         owner_day: if owner.is_some() { count(now - 86_400_000, owner) } else { 0 },
     };
     import::sponsorship(evidence, usage)
+}
+
+// -- the proposal mailbox ---------------------------------------------------------
+
+/// `POST /api/proposals`: a transaction and one owner's approval of it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposeRequest {
+    chain_id: u64,
+    safe: Address,
+    safe_tx: SafeTx,
+    approval: PasskeyApproval,
+    /// The multisig's genesis, for one whose record has not landed yet.
+    #[serde(default)]
+    genesis: Option<Genesis>,
+}
+
+/// A genesis the caller sent, kept only if it derives `safe` on this chain's factory.
+async fn derives(c: &ChainConfig, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
+    let g = g?;
+    let code = registry::proxy_code(&Rpc::new(c), g.factory).await?;
+    (g.address(&code) == safe).then_some(g)
+}
+
+async fn members(app: &App, c: &ChainConfig, safe: Address, known: Option<Genesis>) -> Result<Members, (u16, Value)> {
+    let known = known.or_else(|| app.store.mailbox_genesis(safe).ok().flatten());
+    match registry::members(&app.config, c, safe, known.as_ref()).await {
+        Ok(Some(m)) => Ok(m),
+        Ok(None) => Err(view::unknown_safe()),
+        Err(e) => Err(view::error(502, &e.to_string())),
+    }
+}
+
+/// Check the approval as the chain would, then merge it under the store's lock.
+async fn propose(app: &App, r: ProposeRequest) -> (u16, Value) {
+    let Some(c) = app.config.chain(r.chain_id) else {
+        return view::error(400, "chainId is not a configured chain");
+    };
+    if let Some(detail) = r.safe_tx.refusal() {
+        return view::proposal_refused(&proposal::Refusal::Transaction { detail: detail.into() });
+    }
+    let genesis = derives(c, r.safe, r.genesis).await;
+    let members = match members(app, c, r.safe, genesis.clone()).await {
+        Ok(m) => m,
+        Err(answer) => return answer,
+    };
+    if let Some(g) = &genesis {
+        let _ = app.store.keep_mailbox_genesis(r.safe, g);
+    }
+    if r.safe_tx.nonce < members.nonce {
+        return view::proposal_refused(&proposal::Refusal::Transaction {
+            detail: format!("nonce {} is used already (the Safe is at {})", r.safe_tx.nonce, members.nonce),
+        });
+    }
+    let Some(code) = registry::proxy_code(&Rpc::new(c), r.approval.owner_genesis.factory).await else {
+        return view::error(502, "the owner's factory did not answer proxyCreationCode()");
+    };
+    let hash = r.safe_tx.hash(r.chain_id, r.safe);
+    if let Err(error) = proposal::verify_approval(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded()) {
+        return view::proposal_refused(&proposal::Refusal::Approval { error });
+    }
+    match app.store.merge_proposal(r.chain_id, r.safe, r.safe_tx, r.approval, crate::now_ms()) {
+        Ok(Ok((p, outcome))) => view::proposal_submitted(outcome, &p),
+        Ok(Err(refusal)) => view::proposal_refused(&refusal),
+        Err(e) => view::error(500, &format!("store: {e}")),
+    }
+}
+
+async fn list_proposals(app: &App, c: &ChainConfig, safe: Address) -> (u16, Value) {
+    let members = match members(app, c, safe, None).await {
+        Ok(m) => m,
+        Err(answer) => return answer,
+    };
+    let since = crate::now_ms().saturating_sub(proposal::KEEP_MS) as i64;
+    match app.store.proposals(c.chain_id, safe, since) {
+        Ok(list) => view::proposals(c.chain_id, safe, &members, &list),
+        Err(e) => view::error(500, &format!("store: {e}")),
+    }
+}
+
+async fn get_proposal(app: &App, c: &ChainConfig, safe: Address, hash: genesis_rules::B256) -> (u16, Value) {
+    let members = match members(app, c, safe, None).await {
+        Ok(m) => m,
+        Err(answer) => return answer,
+    };
+    match app.store.proposal(c.chain_id, &hash.to_string()) {
+        Ok(Some(p)) if p.safe == safe => view::proposal(&members, &p),
+        Ok(_) => view::error(404, "no such proposal"),
+        Err(e) => view::error(500, &format!("store: {e}")),
+    }
 }
 
 fn invalidate(app: &App, safe: Address) {

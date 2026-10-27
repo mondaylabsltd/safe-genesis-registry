@@ -7,6 +7,8 @@
 use alloy::primitives::{Address, B256, U256, address, hex, keccak256};
 
 pub const SIGNER_FACTORY: Address = address!("0x1d31F259eE307358a26dFb23EB365939E8641195");
+/// SafeWebAuthnSharedSigner v0.2.1: the signer a wallet `configure`s its first key on.
+pub const SHARED_SIGNER: Address = address!("0x94a4F6affBd8975951142c3999aEAB7ecee555c2");
 pub const SIGNER_SINGLETON: Address = address!("0x4E27b51350e6c2083EE19011120F50DAfEc5CA50");
 
 /// SafeWebAuthnSignerProxy creation code, as the deployed factory embeds it.
