@@ -173,9 +173,10 @@ address.
 
 | Network | Address | Deployment |
 | --- | --- | --- |
+| Gnosis (100) | `0xdA88357C2eB85e7e0515B1122a28befd6Dc8fb89` | tx `0x2d0333a541fca54184abaca2ad37bbb25779875f8922733c0801f013be214548`, block 48968687; runtime code identical to this repo's build |
 | Arc Testnet (5042002) | `0xdA88357C2eB85e7e0515B1122a28befd6Dc8fb89` | tx `0x180019e760a9727356fa16490001a099fd92282c56f534d84a2d7d9eb7415854`, block 69295041; runtime code identical to this repo's build |
 
-No mainnet deployment yet.
+Every chain gets this same address; deploy it anywhere else with `script/Deploy.s.sol` (it refuses if the deterministic deployer is missing).
 
 ## Development
 
