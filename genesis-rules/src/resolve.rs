@@ -122,7 +122,7 @@ impl ServiceCreation {
         let Some((factory, singleton, initializer, salt_nonce)) = self.params() else {
             return Resolution::NotFound;
         };
-        let genesis = Genesis { factory, singleton, salt_nonce, initializer, naming: None };
+        let genesis = Genesis { factory, singleton, salt_nonce, initializer, name: None };
         checked(genesis, safe, proxy_creation_code, Source::TransactionService { tx_hash: self.transaction_hash })
     }
 }
@@ -166,7 +166,7 @@ pub fn from_calldata(
             if let Some(cb) = callback {
                 salt_nonce = address::callback_salt_nonce(salt_nonce, cb);
             }
-            let genesis = Genesis { factory, singleton, salt_nonce, initializer, naming: None };
+            let genesis = Genesis { factory, singleton, salt_nonce, initializer, name: None };
             match checked(genesis, safe, proxy_creation_code, Source::Calldata { tx_hash, function }) {
                 found @ Resolution::Found { .. } => return found,
                 Resolution::Mismatch { computed } => mismatch = mismatch.or(Some(computed)),
@@ -287,7 +287,7 @@ impl SafeWalletProps {
         let (Some(initializer), Ok(salt_nonce)) = (self.initializer(), U256::from_str_radix(&self.salt_nonce, 10)) else {
             return Resolution::NotFound;
         };
-        let genesis = Genesis { factory: self.factory_address, singleton: self.master_copy, salt_nonce, initializer, naming: None };
+        let genesis = Genesis { factory: self.factory_address, singleton: self.master_copy, salt_nonce, initializer, name: None };
         checked(genesis, safe, proxy_creation_code, Source::SafeWalletConfig)
     }
 }

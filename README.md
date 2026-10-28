@@ -162,8 +162,8 @@ One contract, no constructor arguments, deployed through the deterministic
 CREATE2 deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a fixed
 salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
-the address depends on code alone, not comments: v2 (named geneses,
-`recordNamed`) is `0x0872CdAd17173dd87B15a5D886aA5028514328CF`.
+the address depends on code alone, not comments: v2 (a name written with the record,
+`recordNamed`) is `0x70b35C0FC8885019ff938542CD4E431725874802`.
 
 ```shell
 cd contracts

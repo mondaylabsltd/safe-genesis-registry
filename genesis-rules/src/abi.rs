@@ -13,7 +13,6 @@ alloy::sol! {
             address recorder;
             uint64 recordedAt;
             string name;
-            bytes32 nameSeed;
         }
 
         event GenesisRecorded(
@@ -39,10 +38,9 @@ alloy::sol! {
             bytes proxyCreationCode,
             address singleton,
             bytes initializer,
-            string name,
-            bytes32 nameSeed
+            uint256 saltNonce,
+            string name
         ) external returns (address safe, bool created);
-        function namedSaltNonce(string name, bytes32 nameSeed) external pure returns (uint256);
         function genesisOf(address safe) external view returns (bool found, Genesis genesis);
         function isRecorded(address safe) external view returns (bool);
         function deployCallOf(address safe) external view returns (address factory, bytes data);

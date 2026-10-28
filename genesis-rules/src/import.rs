@@ -138,7 +138,7 @@ pub fn admit(
         return unrecordable("initializer empty or over the registry's limit");
     }
     if !genesis.named_right() {
-        return unrecordable("a name the registry would not take, or not the one the salt nonce was derived from");
+        return unrecordable("a name the registry would not take (1 to 64 bytes)");
     }
     if genesis.address(&proxy_creation_code) != safe {
         return Err(Refusal::Unresolved {
@@ -347,7 +347,7 @@ mod tests {
             singleton: address!("0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"),
             salt_nonce: U256::from(1),
             initializer: Bytes::from_static(&[1, 2, 3]),
-            naming: None,
+            name: None,
         }
     }
 
@@ -420,10 +420,7 @@ mod tests {
         let safe = zero.address(&code);
         assert!(matches!(admit("x".into(), safe, 1, found(zero), code.clone(), 0), Err(Refusal::Unrecordable { .. })));
         let big = Genesis { initializer: vec![1u8; MAX_INITIALIZER_LENGTH + 1].into(), ..genesis() };
-        let misnamed = Genesis {
-            naming: Some(crate::genesis::Naming { name: "Team fund".into(), name_seed: B256::ZERO }),
-            ..genesis()
-        };
+        let misnamed = Genesis { name: Some("x".repeat(65)), ..genesis() };
         assert!(matches!(
             admit("t".into(), misnamed.address(&code), 100, found(misnamed), code.clone(), 0),
             Err(Refusal::Unrecordable { .. })

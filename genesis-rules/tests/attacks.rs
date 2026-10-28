@@ -41,7 +41,7 @@ fn genesis_with(singleton: Address, to: Address, data: Vec<u8>, handler: Address
         payment: U256::ZERO,
         payment_receiver: Address::ZERO,
     };
-    Genesis { factory: F130, singleton, salt_nonce: U256::ZERO, initializer: s.encode(), naming: None }
+    Genesis { factory: F130, singleton, salt_nonce: U256::ZERO, initializer: s.encode(), name: None }
 }
 
 fn genesis(to: Address, data: Vec<u8>) -> Genesis {
@@ -151,7 +151,7 @@ fn multisend_with_trailing_bytes_after_the_abi() {
 
 #[test]
 fn not_a_setup_initializer() {
-    let g = Genesis { factory: F130, singleton: S130, salt_nonce: U256::ZERO, initializer: vec![0xde, 0xad, 0xbe, 0xef].into(), naming: None };
+    let g = Genesis { factory: F130, singleton: S130, salt_nonce: U256::ZERO, initializer: vec![0xde, 0xad, 0xbe, 0xef].into(), name: None };
     let (v, problems) = verdict(&g);
     assert_eq!(v, Verdict::Blocked);
     assert!(problems.contains(&Problem::UnreadableSetup));

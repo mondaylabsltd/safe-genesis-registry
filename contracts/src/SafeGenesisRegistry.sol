@@ -53,12 +53,10 @@ pragma solidity 0.8.28;
 ///           redeployed from its genesis starts with its original owners.
 ///         - `totalRecords` and `isRecorded` count any record, including ones
 ///           filed at addresses no Safe lives at.
-///         - A NAME, when a Safe has one, is part of its genesis like the
-///           rest: `recordNamed` derives the salt nonce from the name and a
-///           seed, so the name is an input to the address too. Nobody can
-///           file another name under a named Safe's address, and a name is
-///           never changed. A Safe created without one (any Safe made
-///           elsewhere) has none.
+///         - A NAME, when a record has one, is a label written with the
+///           genesis (`recordNamed`) and never changed. It is not an input to
+///           the address and proves nothing: names may repeat, whoever writes
+///           the record first chooses it. The address is the Safe's identity.
 ///         - The registry makes no external call.
 ///         - EVM CREATE2 only: chains that derive CREATE2 addresses
 ///           differently (zkSync Era) are out of scope.
@@ -73,9 +71,6 @@ contract SafeGenesisRegistry {
 
     /// Upper bound on a name, in bytes (UTF-8 is not checked on chain).
     uint256 public constant MAX_NAME_LENGTH = 64;
-
-    /// The domain of a named Safe's salt nonce (`namedSaltNonce`).
-    bytes32 public constant NAME_DOMAIN = keccak256("SafeGenesisRegistry.name");
 
     /// `createProxyWithNonce(address,bytes,uint256)`.
     bytes4 public constant CREATE_PROXY_WITH_NONCE = 0x1688f0b9;
@@ -97,12 +92,9 @@ contract SafeGenesisRegistry {
         address recorder;
         /// Block number of the write. Informational only.
         uint64 recordedAt;
-        /// The Safe's name, or empty. When set, `saltNonce` is
-        /// `namedSaltNonce(name, nameSeed)`: the name is part of the address.
+        /// A name written with the record (`recordNamed`), or empty. A label:
+        /// not part of the address, never changed, not unique.
         string name;
-        /// The seed the salt nonce was derived from with the name; zero
-        /// without a name.
-        bytes32 nameSeed;
     }
 
     mapping(address safe => Genesis) private _genesis;
@@ -155,29 +147,25 @@ contract SafeGenesisRegistry {
         return _record(factory, proxyCreationCode, singleton, initializer, saltNonce);
     }
 
-    /// `record` for a Safe created with a name: its salt nonce is
-    /// `namedSaltNonce(name, nameSeed)`, so the name is one of the inputs to
-    /// its address. Write-once like `record`. If the same Safe was recorded
-    /// first without its name (its salt nonce copied from this call, say),
-    /// the name is added: only this name and seed reach that salt nonce.
+    /// `record`, with a name for the Safe written in the same record. The name
+    /// is kept only by the write that creates the record: a Safe recorded
+    /// already keeps the name it has (or none). It is not part of the
+    /// address.
     function recordNamed(
         address factory,
         bytes calldata proxyCreationCode,
         address singleton,
         bytes calldata initializer,
-        string calldata name,
-        bytes32 nameSeed
+        uint256 saltNonce,
+        string calldata name
     ) external returns (address safe, bool created) {
         uint256 length = bytes(name).length;
         if (length == 0) revert EmptyName();
         if (length > MAX_NAME_LENGTH) revert NameTooLong(length);
 
-        (safe, created) =
-            _record(factory, proxyCreationCode, singleton, initializer, namedSaltNonce(name, nameSeed));
-        Genesis storage g = _genesis[safe];
-        if (bytes(g.name).length == 0) {
-            g.name = name;
-            g.nameSeed = nameSeed;
+        (safe, created) = _record(factory, proxyCreationCode, singleton, initializer, saltNonce);
+        if (created) {
+            _genesis[safe].name = name;
             emit GenesisNamed(safe, name);
         }
     }
@@ -202,12 +190,6 @@ contract SafeGenesisRegistry {
         Genesis storage g = _genesis[safe];
         if (g.factory == address(0)) return (address(0), "");
         return (g.factory, abi.encodeWithSelector(CREATE_PROXY_WITH_NONCE, g.singleton, g.initializer, g.saltNonce));
-    }
-
-    /// The salt nonce of a Safe named `name`: the name, through its seed, is
-    /// part of the address.
-    function namedSaltNonce(string calldata name, bytes32 nameSeed) public pure returns (uint256) {
-        return uint256(keccak256(abi.encode(NAME_DOMAIN, keccak256(bytes(name)), nameSeed)));
     }
 
     /// The address `createProxyWithNonce(singleton, initializer, saltNonce)`
