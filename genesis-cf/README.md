@@ -158,6 +158,10 @@ re-verifies everything it gets — but it only takes what the chain would.
   owner's on-chain check would: `SafeMessage(safeTxHash)` under the owner's
   domain, `clientDataJSON` rebuilt as the signer contract does,
   user-verified.
+- Or by a plain account (an EOA): `{"owner", "signature"}`, its EIP-712
+  signature of the SafeTx (`eth_signTypedData_v4`), 65 bytes `r ‖ s ‖ v`.
+  `ecrecover(safeTxHash, v, r, s)` must be the owner, as the Safe checks it;
+  `v` 0/1 is stored as 27/28. Both kinds fill the same proposal.
 - The owners are the deployed Safe's on that chain, or what its genesis
   creates there. `genesis` is optional: a Safe whose record has not landed
   yet is known by it, if it derives the address.

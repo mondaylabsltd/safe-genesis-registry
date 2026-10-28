@@ -15,7 +15,7 @@ use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{self, Evidence, Sponsorship, Task, Usage};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
-use genesis_rules::proposal::{self, Members, PasskeyApproval, SafeTx};
+use genesis_rules::proposal::{self, Approval, Members, SafeTx};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -366,7 +366,7 @@ struct ProposeRequest {
     chain_id: u64,
     safe: Address,
     safe_tx: SafeTx,
-    approval: PasskeyApproval,
+    approval: Approval,
     /// The multisig's genesis, for one whose record has not landed yet.
     #[serde(default)]
     genesis: Option<Genesis>,
@@ -409,14 +409,21 @@ async fn propose(app: &App, r: ProposeRequest) -> (u16, Value) {
             detail: format!("nonce {} is used already (the Safe is at {})", r.safe_tx.nonce, members.nonce),
         });
     }
-    let Some(code) = registry::factory_proxy_code(&target, r.approval.owner_genesis.factory).await else {
-        return view::error(502, "the owner's factory did not answer proxyCreationCode()");
+    // A passkey owner's genesis is checked against its factory's code; a plain
+    // account needs none.
+    let code = match r.approval.owner_factory() {
+        Some(factory) => match registry::factory_proxy_code(&target, factory).await {
+            Some(code) => code,
+            None => return view::error(502, "the owner's factory did not answer proxyCreationCode()"),
+        },
+        None => Default::default(),
     };
     let hash = r.safe_tx.hash(r.chain_id, r.safe);
-    if let Err(error) = proposal::verify_approval(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded()) {
-        return view::proposal_refused(&proposal::Refusal::Approval { error });
-    }
-    match app.store.merge_proposal(r.chain_id, r.safe, r.safe_tx, r.approval, crate::now_ms()) {
+    let approval = match proposal::verify(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded()) {
+        Ok(a) => a,
+        Err(error) => return view::proposal_refused(&proposal::Refusal::Approval { error }),
+    };
+    match app.store.merge_proposal(r.chain_id, r.safe, r.safe_tx, approval, crate::now_ms()) {
         Ok(Ok((p, outcome))) => view::proposal_submitted(outcome, &p),
         Ok(Err(refusal)) => view::proposal_refused(&refusal),
         Err(e) => view::error(500, &format!("store: {e}")),

@@ -19,6 +19,10 @@
 //! assertion over that message hash. The service verifies the same assertion
 //! the same way, rebuilding `clientDataJSON` exactly as the signer contract
 //! does, so an approval it accepts is one the chain accepts.
+//!
+//! Or by an owner that is a plain account (an EOA in MetaMask, Rabby, …): its
+//! EIP-712 signature of the SafeTx, which the Safe checks with `ecrecover`
+//! over the safeTxHash (`v` 27 or 28). The service recovers it the same way.
 
 use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolValue;
@@ -143,6 +147,50 @@ pub struct PasskeyApproval {
     pub s: U256,
 }
 
+/// An owner that is a plain account: its EIP-712 signature of the SafeTx,
+/// `r ‖ s ‖ v` (65 bytes, `v` 27 or 28 — 0 or 1 is taken as 27 or 28, as
+/// some wallets answer).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EcdsaApproval {
+    pub owner: Address,
+    pub signature: Bytes,
+}
+
+/// One owner's approval: by passkey (a Vela account) or by a plain account.
+/// On the wire the two are told apart by their fields (`ownerGenesis` …, or
+/// `signature`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Approval {
+    Passkey(PasskeyApproval),
+    Ecdsa(EcdsaApproval),
+}
+
+impl Approval {
+    pub fn owner(&self) -> Address {
+        match self {
+            Self::Passkey(a) => a.owner,
+            Self::Ecdsa(a) => a.owner,
+        }
+    }
+
+    /// The factory whose proxy code a passkey owner's genesis needs; `None`
+    /// for a plain account.
+    pub fn owner_factory(&self) -> Option<Address> {
+        match self {
+            Self::Passkey(a) => Some(a.owner_genesis.factory),
+            Self::Ecdsa(_) => None,
+        }
+    }
+}
+
+impl From<PasskeyApproval> for Approval {
+    fn from(a: PasskeyApproval) -> Self {
+        Self::Passkey(a)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ApprovalError {
@@ -154,6 +202,8 @@ pub enum ApprovalError {
     /// The signer contract requires the user-verified flag.
     NotUserVerified,
     BadSignature,
+    /// A plain account's signature that is not 65 bytes with `v` 27 or 28.
+    NotAnEip712Signature,
 }
 
 impl std::fmt::Display for ApprovalError {
@@ -165,6 +215,7 @@ impl std::fmt::Display for ApprovalError {
             Self::UnknownSigner { signer } => write!(f, "{signer} is not a passkey signer of the owner"),
             Self::NotUserVerified => write!(f, "the assertion is not user-verified"),
             Self::BadSignature => write!(f, "the signature does not verify"),
+            Self::NotAnEip712Signature => write!(f, "not a 65-byte EIP-712 signature (v 27 or 28)"),
         }
     }
 }
@@ -214,6 +265,71 @@ pub fn verify_approval(
     if key.verifies(&message, &signature) { Ok(()) } else { Err(ApprovalError::BadSignature) }
 }
 
+/// Check a plain account's approval of `safe_tx_hash` as the Safe does
+/// (`ecrecover(safeTxHash, v, r, s) == owner`, an owner). Returns it with
+/// `v` as the Safe needs it (27 or 28).
+pub fn verify_ecdsa_approval(
+    safe_tx_hash: B256,
+    owners: &[Address],
+    approval: &EcdsaApproval,
+) -> Result<EcdsaApproval, ApprovalError> {
+    if !owners.contains(&approval.owner) {
+        return Err(ApprovalError::NotAnOwner { owner: approval.owner });
+    }
+    let recovered = recover(safe_tx_hash, &approval.signature)?;
+    if recovered != approval.owner {
+        return Err(ApprovalError::BadSignature);
+    }
+    let mut signature = approval.signature.to_vec();
+    if signature[64] < 27 {
+        signature[64] += 27;
+    }
+    Ok(EcdsaApproval { owner: approval.owner, signature: signature.into() })
+}
+
+/// `ecrecover(hash, v, r, s)`: the signer of a 65-byte `r ‖ s ‖ v`. A high `s`
+/// recovers as the precompile does (it accepts either half).
+pub fn recover(hash: B256, signature: &[u8]) -> Result<Address, ApprovalError> {
+    use k256::ecdsa::{RecoveryId, Signature as K1Signature, VerifyingKey};
+    if signature.len() != 65 {
+        return Err(ApprovalError::NotAnEip712Signature);
+    }
+    let parity = match signature[64] {
+        0 | 27 => 0u8,
+        1 | 28 => 1u8,
+        _ => return Err(ApprovalError::NotAnEip712Signature),
+    };
+    let mut sig = K1Signature::from_slice(&signature[..64]).map_err(|_| ApprovalError::BadSignature)?;
+    let mut parity = parity;
+    if let Some(low) = sig.normalize_s() {
+        sig = low;
+        parity ^= 1;
+    }
+    let id = RecoveryId::from_byte(parity).ok_or(ApprovalError::BadSignature)?;
+    let key = VerifyingKey::recover_from_prehash(hash.as_slice(), &sig, id).map_err(|_| ApprovalError::BadSignature)?;
+    let point = key.to_encoded_point(false);
+    Ok(Address::from_slice(&keccak256(&point.as_bytes()[1..])[12..]))
+}
+
+/// Check one approval, either kind. `owner_proxy_code` is a passkey owner's
+/// genesis factory's proxy creation code (unused for a plain account). Returns
+/// the approval as stored (a plain account's `v` made 27 or 28).
+pub fn verify(
+    chain_id: u64,
+    safe_tx_hash: B256,
+    owners: &[Address],
+    approval: &Approval,
+    owner_proxy_code: &[u8],
+    known: &KnownContracts,
+) -> Result<Approval, ApprovalError> {
+    match approval {
+        Approval::Passkey(a) => {
+            verify_approval(chain_id, safe_tx_hash, owners, a, owner_proxy_code, known).map(|()| approval.clone())
+        }
+        Approval::Ecdsa(a) => verify_ecdsa_approval(safe_tx_hash, owners, a).map(Approval::Ecdsa),
+    }
+}
+
 /// A proposal as the mailbox holds and serves it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -233,18 +349,18 @@ pub struct Proposal {
 #[serde(rename_all = "camelCase")]
 pub struct StoredApproval {
     #[serde(flatten)]
-    pub approval: PasskeyApproval,
+    pub approval: Approval,
     pub created_ms: u64,
 }
 
 impl Proposal {
-    pub fn new(chain_id: u64, safe: Address, safe_tx: SafeTx, first: PasskeyApproval, now_ms: u64) -> Self {
+    pub fn new(chain_id: u64, safe: Address, safe_tx: SafeTx, first: Approval, now_ms: u64) -> Self {
         Self {
             chain_id,
             safe,
             safe_tx_hash: safe_tx.hash(chain_id, safe),
             safe_tx,
-            proposer: first.owner,
+            proposer: first.owner(),
             approvals: vec![StoredApproval { approval: first, created_ms: now_ms }],
             created_ms: now_ms,
             updated_ms: now_ms,
@@ -253,8 +369,8 @@ impl Proposal {
 
     /// Add an owner's approval; an owner that approved already keeps its first.
     /// Returns whether anything changed.
-    pub fn add(&mut self, approval: PasskeyApproval, now_ms: u64) -> bool {
-        if self.approvals.iter().any(|a| a.approval.owner == approval.owner) || self.approvals.len() >= MAX_APPROVALS {
+    pub fn add(&mut self, approval: Approval, now_ms: u64) -> bool {
+        if self.approvals.iter().any(|a| a.approval.owner() == approval.owner()) || self.approvals.len() >= MAX_APPROVALS {
             return false;
         }
         self.approvals.push(StoredApproval { approval, created_ms: now_ms });
@@ -292,7 +408,7 @@ pub fn submit(
     chain_id: u64,
     safe: Address,
     safe_tx: SafeTx,
-    approval: PasskeyApproval,
+    approval: impl Into<Approval>,
     owners: &[Address],
     owner_proxy_code: &[u8],
     known: &KnownContracts,
@@ -301,7 +417,7 @@ pub fn submit(
     if let Some(detail) = safe_tx.refusal() {
         return Err(Refusal::Transaction { detail: detail.into() });
     }
-    verify_approval(chain_id, safe_tx.hash(chain_id, safe), owners, &approval, owner_proxy_code, known)
+    let approval = verify(chain_id, safe_tx.hash(chain_id, safe), owners, &approval.into(), owner_proxy_code, known)
         .map_err(|error| Refusal::Approval { error })?;
     merge(existing, chain_id, safe, safe_tx, approval, now_ms)
 }
@@ -316,7 +432,7 @@ pub fn merge(
     chain_id: u64,
     safe: Address,
     safe_tx: SafeTx,
-    approval: PasskeyApproval,
+    approval: Approval,
     now_ms: u64,
 ) -> Result<(Proposal, Outcome), Refusal> {
     if let Some(detail) = safe_tx.refusal() {
@@ -324,7 +440,7 @@ pub fn merge(
     }
     match existing {
         None => Ok((Proposal::new(chain_id, safe, safe_tx, approval, now_ms), Outcome::Created)),
-        Some(p) if p.approvals.iter().any(|a| a.approval.owner == approval.owner) => Ok((p, Outcome::Unchanged)),
+        Some(p) if p.approvals.iter().any(|a| a.approval.owner() == approval.owner()) => Ok((p, Outcome::Unchanged)),
         Some(mut p) => {
             if p.add(approval, now_ms) { Ok((p, Outcome::Approved)) } else { Err(Refusal::Full) }
         }
@@ -413,9 +529,9 @@ mod tests {
             r: U256::ZERO,
             s: U256::ZERO,
         };
-        let mut p = Proposal::new(100, Address::repeat_byte(5), tx, a(Address::repeat_byte(1)), 1);
-        assert!(!p.add(a(Address::repeat_byte(1)), 2));
-        assert!(p.add(a(Address::repeat_byte(2)), 3));
+        let mut p = Proposal::new(100, Address::repeat_byte(5), tx, a(Address::repeat_byte(1)).into(), 1);
+        assert!(!p.add(a(Address::repeat_byte(1)).into(), 2));
+        assert!(p.add(a(Address::repeat_byte(2)).into(), 3));
         assert_eq!(p.approvals.len(), 2);
         assert_eq!(p.updated_ms, 3);
     }

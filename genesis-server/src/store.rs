@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use genesis_rules::Address;
 use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{Lane, Task};
-use genesis_rules::proposal::{self, Outcome, PasskeyApproval, Proposal, Refusal, SafeTx};
+use genesis_rules::proposal::{self, Approval, Outcome, Proposal, Refusal, SafeTx};
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub struct Store {
@@ -110,7 +110,7 @@ impl Store {
         chain_id: u64,
         safe: Address,
         safe_tx: SafeTx,
-        approval: PasskeyApproval,
+        approval: Approval,
         now_ms: u64,
     ) -> R<Result<(Proposal, Outcome), Refusal>> {
         self.with(|c| {

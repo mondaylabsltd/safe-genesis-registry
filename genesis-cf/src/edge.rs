@@ -8,7 +8,7 @@ use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{self, Evidence, Lane, Sponsorship, Task, Usage};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
-use genesis_rules::proposal::{self, Members, Outcome, PasskeyApproval, Proposal, SafeTx};
+use genesis_rules::proposal::{self, Approval, Members, Outcome, Proposal, SafeTx};
 use genesis_rules::lookup::Lookup;
 use genesis_rules::resolve::{self, Resolution, SafeWalletProps, ServiceCreation, ServiceStep, Source};
 use genesis_rules::{Address, Bytes, view};
@@ -394,14 +394,19 @@ impl Edge {
                 detail: format!("nonce {} is used already (the Safe is at {})", r.safe_tx.nonce, members.nonce),
             }));
         }
-        let Some(code) = registry::factory_proxy_code(&target, r.approval.owner_genesis.factory).await else {
-            return Ok(view::error(502, "the owner's factory did not answer proxyCreationCode()"));
+        // A passkey owner's genesis is checked against its factory's code; a
+        // plain account needs none.
+        let code = match r.approval.owner_factory() {
+            Some(factory) => match registry::factory_proxy_code(&target, factory).await {
+                Some(code) => code,
+                None => return Ok(view::error(502, "the owner's factory did not answer proxyCreationCode()")),
+            },
+            None => Default::default(),
         };
         let hash = r.safe_tx.hash(r.chain_id, r.safe);
-        if let Err(error) =
-            proposal::verify_approval(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded())
-        {
-            return Ok(view::proposal_refused(&proposal::Refusal::Approval { error }));
+        match proposal::verify(r.chain_id, hash, &members.owners, &r.approval, &code, KnownContracts::embedded()) {
+            Ok(a) => r.approval = a,
+            Err(error) => return Ok(view::proposal_refused(&proposal::Refusal::Approval { error })),
         }
         let merged: MergeAnswer = self.do_post("/proposal/merge", &r).await?;
         Ok(match merged {
@@ -539,7 +544,7 @@ pub struct ProposeRequest {
     pub chain_id: u64,
     pub safe: Address,
     pub safe_tx: SafeTx,
-    pub approval: PasskeyApproval,
+    pub approval: Approval,
     /// The multisig's genesis, for one whose record has not landed yet.
     #[serde(default)]
     pub genesis: Option<Genesis>,
