@@ -18,7 +18,7 @@ import {SafeGenesisRegistry} from "../src/SafeGenesisRegistry.sol";
 ///   cast code 0x4e59b44847b379578588920cA78FbF26c0B4956C --rpc-url $RPC
 contract DeployScript is Script {
     /// Fixed forever: changing it moves the registry on every chain.
-    bytes32 internal constant SALT = keccak256("safe-genesis-registry/v1");
+    bytes32 internal constant SALT = keccak256("safe-genesis-registry/v2");
 
     function predicted() public pure returns (address) {
         return vm.computeCreate2Address(SALT, keccak256(type(SafeGenesisRegistry).creationCode), CREATE2_FACTORY);

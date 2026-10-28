@@ -45,7 +45,7 @@ fn setup(owners: Vec<Address>, threshold: u64) -> Setup {
 }
 
 fn genesis_of(s: &Setup, salt_nonce: u64) -> Genesis {
-    Genesis { factory: FACTORY, singleton: SINGLETON, salt_nonce: U256::from(salt_nonce), initializer: s.encode() }
+    Genesis { factory: FACTORY, singleton: SINGLETON, salt_nonce: U256::from(salt_nonce), initializer: s.encode(), naming: None }
 }
 
 fn two_of_three() -> Genesis {
@@ -65,6 +65,8 @@ fn genesis_of_response_round_trips() {
         proxyCreationCodeHash: keccak256(proxy_code()),
         recorder: OWNER_A,
         recordedAt: 42,
+        name: String::new(),
+        nameSeed: B256::ZERO,
     };
     let ret = (true, abi.clone()).abi_encode_params();
     let rec = genesis::decode_genesis_of(&ret).unwrap().unwrap();
@@ -83,6 +85,8 @@ fn genesis_of_response_round_trips() {
         proxyCreationCodeHash: B256::ZERO,
         recorder: Address::ZERO,
         recordedAt: 0,
+        name: String::new(),
+        nameSeed: B256::ZERO,
     };
     let empty = (false, blank).abi_encode_params();
     assert_eq!(genesis::decode_genesis_of(&empty).unwrap(), None);
@@ -483,4 +487,62 @@ fn drift_ignores_order_and_reports_changes() {
     let mut guarded = g.clone();
     guarded.guard = d;
     assert!(matches!(compare(&g, &guarded), Drift::Differs { authority_changed: true, guard: Some(_), .. }));
+}
+
+// -- names ------------------------------------------------------------------------
+
+/// The registry's `namedSaltNonce`, pinned to a value computed apart from this
+/// crate (`cast keccak` of `abi.encode(NAME_DOMAIN, keccak256(name), seed)`).
+#[test]
+fn a_named_salt_nonce_is_the_registrys() {
+    let seed = keccak256("seed");
+    assert_eq!(
+        genesis::named_salt_nonce("Team fund", seed),
+        U256::from_be_bytes(alloy::primitives::b256!("0x7d90e5d3d078ffbf5fd44220f868ea1ef9eb0f4b7eedacff00f517139c743f08").0)
+    );
+}
+
+#[test]
+fn a_name_is_right_only_when_it_made_the_salt_nonce() {
+    let seed = keccak256("seed");
+    let named = |name: &str, salt_nonce: U256| Genesis {
+        naming: Some(genesis::Naming { name: name.into(), name_seed: seed }),
+        salt_nonce,
+        ..two_of_three()
+    };
+    assert!(two_of_three().named_right(), "no name is fine");
+    assert!(named("Team fund", genesis::named_salt_nonce("Team fund", seed)).named_right());
+    assert!(!named("Another", genesis::named_salt_nonce("Team fund", seed)).named_right());
+    assert!(!named("", genesis::named_salt_nonce("", seed)).named_right());
+    let long = "x".repeat(65);
+    assert!(!named(&long, genesis::named_salt_nonce(&long, seed)).named_right());
+}
+
+#[test]
+fn a_named_record_round_trips_and_records_by_name() {
+    let seed = keccak256("seed");
+    let g = Genesis {
+        naming: Some(genesis::Naming { name: "Team fund".into(), name_seed: seed }),
+        salt_nonce: genesis::named_salt_nonce("Team fund", seed),
+        ..two_of_three()
+    };
+    let abi = ISafeGenesisRegistry::Genesis {
+        factory: g.factory,
+        singleton: g.singleton,
+        saltNonce: g.salt_nonce,
+        initializer: g.initializer.clone(),
+        proxyCreationCodeHash: keccak256(proxy_code()),
+        recorder: OWNER_A,
+        recordedAt: 42,
+        name: "Team fund".into(),
+        nameSeed: seed,
+    };
+    let rec = genesis::decode_genesis_of(&(true, abi).abi_encode_params()).unwrap().unwrap();
+    assert_eq!(rec.genesis, g);
+    let call = g.record_call(&proxy_code());
+    assert_eq!(&call[..4], ISafeGenesisRegistry::recordNamedCall::SELECTOR.as_slice());
+    let json = serde_json::to_value(&g).unwrap();
+    assert_eq!(json["name"], "Team fund");
+    assert_eq!(serde_json::from_value::<Genesis>(json).unwrap(), g);
+    assert!(serde_json::to_value(two_of_three()).unwrap().get("name").is_none());
 }

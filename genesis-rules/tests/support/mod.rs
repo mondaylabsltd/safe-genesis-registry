@@ -41,6 +41,7 @@ pub fn vela_wallets() -> Vec<(Address, Bytes, Genesis)> {
                 singleton: f.singleton[i],
                 salt_nonce: U256::from_str_radix(&f.salt_nonce[i], 10).unwrap(),
                 initializer: f.initializer[i].clone(),
+                naming: None,
             };
             (f.proxy[i], f.proxy_codes[f.code_index[i]].clone(), genesis)
         })
@@ -143,6 +144,7 @@ pub fn multisig(owner: Address, like: &Genesis, code: &[u8]) -> (Address, Genesi
         singleton: like.singleton,
         salt_nonce: U256::from(42),
         initializer: s.encode(),
+        naming: None,
     };
     (g.address(code), g)
 }

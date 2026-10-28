@@ -376,7 +376,7 @@ struct ProposeRequest {
 async fn derives(target: &Target, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
     let g = g?;
     let code = registry::factory_proxy_code(target, g.factory).await?;
-    (g.address(&code) == safe).then_some(g)
+    (g.named_right() && g.address(&code) == safe).then_some(g)
 }
 
 async fn members(app: &App, target: &Target, safe: Address, known: Option<Genesis>) -> Result<Members, (u16, Value)> {

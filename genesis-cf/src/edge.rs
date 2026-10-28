@@ -354,7 +354,7 @@ impl Edge {
     async fn derives(&self, target: &Target, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
         let g = g?;
         let code = registry::factory_proxy_code(target, g.factory).await?;
-        (g.address(&code) == safe).then_some(g)
+        (g.named_right() && g.address(&code) == safe).then_some(g)
     }
 
     async fn stored_genesis(&self, safe: Address) -> Option<Genesis> {

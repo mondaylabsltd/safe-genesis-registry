@@ -405,6 +405,7 @@ mod tests {
                 singleton: Address::ZERO,
                 salt_nonce: U256::ZERO,
                 initializer: Bytes::new(),
+                naming: None,
             },
             signer: Address::ZERO,
             authenticator_data: Bytes::new(),

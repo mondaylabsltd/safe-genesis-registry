@@ -162,8 +162,8 @@ One contract, no constructor arguments, deployed through the deterministic
 CREATE2 deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a fixed
 salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
-the address depends on code alone, not comments: currently
-`0xdA88357C2eB85e7e0515B1122a28befd6Dc8fb89`, until the code changes.
+the address depends on code alone, not comments: v2 (named geneses,
+`recordNamed`) is `0x0872CdAd17173dd87B15a5D886aA5028514328CF`.
 
 ```shell
 cd contracts
@@ -173,6 +173,8 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 
 Anyone can deploy it on a new chain and gets the same contract at the same
 address.
+
+v2 is not deployed on any public chain yet. v1 (no names, 0 records) is:
 
 | Network | Address | Deployment |
 | --- | --- | --- |

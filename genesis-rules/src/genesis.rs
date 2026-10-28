@@ -10,6 +10,32 @@ use crate::address;
 /// The registry's `MAX_INITIALIZER_LENGTH`.
 pub const MAX_INITIALIZER_LENGTH: usize = 8_192;
 
+/// The registry's `MAX_NAME_LENGTH`, in bytes.
+pub const MAX_NAME_LENGTH: usize = 64;
+
+/// The registry's `NAME_DOMAIN`.
+pub fn name_domain() -> B256 {
+    keccak256("SafeGenesisRegistry.name")
+}
+
+/// The registry's `namedSaltNonce(name, seed)`: a named Safe's salt nonce, so
+/// its name is one of the inputs to its address.
+pub fn named_salt_nonce(name: &str, seed: B256) -> U256 {
+    let mut word = Vec::with_capacity(96);
+    word.extend_from_slice(name_domain().as_slice());
+    word.extend_from_slice(keccak256(name.as_bytes()).as_slice());
+    word.extend_from_slice(seed.as_slice());
+    U256::from_be_bytes(keccak256(word).0)
+}
+
+/// A Safe's name and the seed its salt nonce was derived from with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Naming {
+    pub name: String,
+    pub name_seed: B256,
+}
+
 /// The creation parameters of one Safe: what the registry stores per address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,9 +44,25 @@ pub struct Genesis {
     pub singleton: Address,
     pub salt_nonce: U256,
     pub initializer: Bytes,
+    /// The name, for a Safe created with one (`recordNamed`): then
+    /// `salt_nonce` is `named_salt_nonce(name, seed)`. See [`Self::named_right`].
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub naming: Option<Naming>,
 }
 
 impl Genesis {
+    /// Whether a name, if any, is one the registry takes and the one the salt
+    /// nonce was derived from — so it is part of the address.
+    pub fn named_right(&self) -> bool {
+        match &self.naming {
+            None => true,
+            Some(n) => {
+                (1..=MAX_NAME_LENGTH).contains(&n.name.len())
+                    && named_salt_nonce(&n.name, n.name_seed) == self.salt_nonce
+            }
+        }
+    }
+
     /// The address these parameters deploy to on a factory with this proxy code.
     pub fn address(&self, proxy_creation_code: &[u8]) -> Address {
         address::safe_address(self.factory, proxy_creation_code, self.singleton, &self.initializer, self.salt_nonce)
@@ -37,8 +79,21 @@ impl Genesis {
         .into()
     }
 
-    /// The registry's `record(...)` calldata for this genesis.
+    /// The registry's `record(...)` calldata for this genesis, or
+    /// `recordNamed(...)` for a named one.
     pub fn record_call(&self, proxy_creation_code: &[u8]) -> Bytes {
+        if let Some(n) = &self.naming {
+            return ISafeGenesisRegistry::recordNamedCall {
+                factory: self.factory,
+                proxyCreationCode: proxy_creation_code.to_vec().into(),
+                singleton: self.singleton,
+                initializer: self.initializer.clone(),
+                name: n.name.clone(),
+                nameSeed: n.name_seed,
+            }
+            .abi_encode()
+            .into();
+        }
         ISafeGenesisRegistry::recordCall {
             factory: self.factory,
             proxyCreationCode: proxy_creation_code.to_vec().into(),
@@ -128,13 +183,20 @@ pub const GENESIS_RECORDED_TOPIC: B256 = ISafeGenesisRegistry::GenesisRecorded::
 pub fn decode_genesis_recorded(topics: &[B256], data: &[u8]) -> Option<(Address, Genesis, B256)> {
     let log = alloy::primitives::LogData::new(topics.to_vec(), data.to_vec().into())?;
     let e = ISafeGenesisRegistry::GenesisRecorded::decode_log_data(&log).ok()?;
-    let genesis = Genesis { factory: e.factory, singleton: e.singleton, salt_nonce: e.saltNonce, initializer: e.initializer };
+    let genesis =
+        Genesis { factory: e.factory, singleton: e.singleton, salt_nonce: e.saltNonce, initializer: e.initializer, naming: None };
     Some((e.safe, genesis, e.proxyCreationCodeHash))
 }
 
 fn from_abi(g: ISafeGenesisRegistry::Genesis) -> Recorded {
     Recorded {
-        genesis: Genesis { factory: g.factory, singleton: g.singleton, salt_nonce: g.saltNonce, initializer: g.initializer },
+        genesis: Genesis {
+            factory: g.factory,
+            singleton: g.singleton,
+            salt_nonce: g.saltNonce,
+            initializer: g.initializer,
+            naming: (!g.name.is_empty()).then_some(Naming { name: g.name, name_seed: g.nameSeed }),
+        },
         proxy_creation_code_hash: g.proxyCreationCodeHash,
         recorder: g.recorder,
         recorded_at: g.recordedAt,

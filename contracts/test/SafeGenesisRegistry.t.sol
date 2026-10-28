@@ -259,4 +259,83 @@ contract SafeGenesisRegistryTest is Test {
         assertTrue(found);
         assertEq(g.saltNonce, n);
     }
+
+    // -- recordNamed ------------------------------------------------------------
+
+    bytes32 internal constant SEED = keccak256("seed");
+
+    function _recordNamed(string memory name, bytes32 seed) internal returns (address safe, bool created) {
+        return registry.recordNamed(address(factory), proxyCode, address(singleton), _init(), name, seed);
+    }
+
+    function test_RecordNamed_TheNameIsPartOfTheAddress() public {
+        (address safe, bool created) = _recordNamed("Team fund", SEED);
+        assertTrue(created);
+        uint256 saltNonce = registry.namedSaltNonce("Team fund", SEED);
+        assertEq(saltNonce, uint256(keccak256(abi.encode(keccak256("SafeGenesisRegistry.name"), keccak256("Team fund"), SEED))));
+        assertEq(safe, _expected(_init(), saltNonce), "where the factory deploys it");
+        assertEq(_replay(safe), safe);
+        (bool found, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertTrue(found);
+        assertEq(g.name, "Team fund");
+        assertEq(g.nameSeed, SEED);
+        assertEq(g.saltNonce, saltNonce);
+    }
+
+    function test_RecordNamed_AnotherNameIsAnotherSafe() public {
+        (address a,) = _recordNamed("Team fund", SEED);
+        (address b, bool created) = _recordNamed("Team fund!", SEED);
+        assertTrue(created);
+        assertTrue(a != b);
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(a);
+        assertEq(g.name, "Team fund", "the first is untouched");
+    }
+
+    function test_RecordNamed_IsWriteOnce() public {
+        (address a,) = _recordNamed("Team fund", SEED);
+        vm.prank(dave);
+        (address b, bool created) = _recordNamed("Team fund", SEED);
+        assertEq(a, b);
+        assertFalse(created);
+        assertEq(registry.totalRecords(), 1);
+    }
+
+    /// Someone copies the salt nonce out of a pending recordNamed and records
+    /// it first without the name: the named call still names it.
+    function test_RecordNamed_NamesASafeRecordedFirstWithoutIt() public {
+        uint256 saltNonce = registry.namedSaltNonce("Team fund", SEED);
+        vm.prank(dave);
+        (address copied,) = _record(_init(), saltNonce);
+        (, SafeGenesisRegistry.Genesis memory before) = registry.genesisOf(copied);
+        assertEq(before.name, "");
+        (address safe, bool created) = _recordNamed("Team fund", SEED);
+        assertEq(safe, copied);
+        assertFalse(created);
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "Team fund");
+        assertEq(g.recorder, dave, "the first writer stays");
+        assertEq(registry.totalRecords(), 1);
+    }
+
+    function test_RecordNamed_RevertsOnEmptyOrLongNames() public {
+        vm.expectRevert(SafeGenesisRegistry.EmptyName.selector);
+        _recordNamed("", SEED);
+        string memory long = string(new bytes(65));
+        vm.expectRevert(abi.encodeWithSelector(SafeGenesisRegistry.NameTooLong.selector, 65));
+        _recordNamed(long, SEED);
+        _recordNamed(string(new bytes(64)), SEED);
+    }
+
+    function test_Record_KeepsNoName() public {
+        (address safe,) = _record(_init(), 7);
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "");
+        assertEq(g.nameSeed, bytes32(0));
+    }
+
+    function testFuzz_RecordNamed_FilesWhereTheFactoryDeploys(string calldata name, bytes32 seed) public {
+        vm.assume(bytes(name).length > 0 && bytes(name).length <= 64);
+        (address safe,) = _recordNamed(name, seed);
+        assertEq(safe, _expected(_init(), registry.namedSaltNonce(name, seed)));
+    }
 }

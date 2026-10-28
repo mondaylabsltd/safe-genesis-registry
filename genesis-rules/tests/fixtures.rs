@@ -47,6 +47,7 @@ fn load(name: &str) -> Option<Vec<Row>> {
                     singleton: f.singleton[i],
                     salt_nonce: U256::from_str_radix(&f.salt_nonce[i], 10).unwrap(),
                     initializer: f.initializer[i].clone(),
+                    naming: None,
                 },
                 label: f.label[i].clone(),
             })
