@@ -174,7 +174,13 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 Anyone can deploy it on a new chain and gets the same contract at the same
 address.
 
-v2 is not deployed on any public chain yet. v1 (no names, 0 records) is:
+v2 deployments:
+
+| Network | Address | Deployment |
+| --- | --- | --- |
+| Arc Testnet (5042002) | `0x70b35C0FC8885019ff938542CD4E431725874802` | tx `0x45f305fa8bd65836d65ee2e827bb7de1f093807ea85253dbbb6ec3f473f9cd7e`, block 69439613 |
+
+v1 (no names, 0 records):
 
 | Network | Address | Deployment |
 | --- | --- | --- |
