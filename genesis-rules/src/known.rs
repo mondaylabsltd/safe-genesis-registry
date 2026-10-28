@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use alloy::primitives::{Address, B256};
+use alloy::primitives::{Address, B256, Bytes};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,4 +121,38 @@ impl KnownContracts {
     pub fn is_empty(&self) -> bool {
         self.by_address.is_empty()
     }
+
+    /// The proxy creation code a known factory at `factory` returns
+    /// (`data/proxy-creation-code.json`), without asking any chain: what lets
+    /// an address be derived on a chain the service has no RPC for. `None` for
+    /// a factory it does not know, or one whose known codes disagree.
+    pub fn proxy_creation_code(&self, factory: Address) -> Option<Bytes> {
+        let mut codes = self
+            .at(factory)
+            .iter()
+            .filter(|c| c.kind() == Kind::ProxyFactory)
+            .map(|c| proxy_creation_codes().get(&c.code_hash));
+        let first = codes.next()??;
+        codes.all(|c| c == Some(first)).then(|| first.clone())
+    }
+}
+
+/// `proxyCreationCode()` by the factory's runtime code hash.
+fn proxy_creation_codes() -> &'static HashMap<B256, Bytes> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Row {
+        code_hash: B256,
+        proxy_creation_code: Bytes,
+    }
+    #[derive(Deserialize)]
+    struct Table {
+        factories: Vec<Row>,
+    }
+    static TABLE: OnceLock<HashMap<B256, Bytes>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let t: Table =
+            serde_json::from_str(include_str!("../data/proxy-creation-code.json")).expect("embedded proxy-creation-code.json");
+        t.factories.into_iter().map(|r| (r.code_hash, r.proxy_creation_code)).collect()
+    })
 }

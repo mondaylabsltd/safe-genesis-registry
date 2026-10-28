@@ -140,39 +140,83 @@ pub async fn safe_state(chain: &ChainConfig, safe: Address) -> RpcResult<SafeSta
     })
 }
 
-/// Who may approve `safe`'s transactions on `chain`, and from which nonce:
+/// The chain a mailbox request is about. Proposals are accepted for ANY
+/// chain: the wallet sends wherever its owners have added a network, and the
+/// service reads only the chains it is configured with. On another one
+/// (`Unread`) the mailbox judges by the Safe's genesis alone — the owners it
+/// creates, the address the canonical factory's own proxy code derives — and
+/// the chain stays the last word when the transaction is executed.
+#[derive(Clone, Debug)]
+pub enum Target {
+    Read(ChainConfig),
+    Unread(u64),
+}
+
+impl Target {
+    /// `None` for chain id 0, which is no chain.
+    pub fn of(config: &Config, chain_id: u64) -> Option<Self> {
+        match config.chain(chain_id) {
+            Some(c) => Some(Self::Read(c.clone())),
+            None if chain_id > 0 => Some(Self::Unread(chain_id)),
+            None => None,
+        }
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        match self {
+            Self::Read(c) => c.chain_id,
+            Self::Unread(id) => *id,
+        }
+    }
+}
+
+/// A factory's proxy creation code on `target`: asked of the chain where the
+/// service reads it, else the known factory's own (`None` for another).
+pub async fn factory_proxy_code(target: &Target, factory: Address) -> Option<Bytes> {
+    match target {
+        Target::Read(c) => proxy_code(&Rpc::new(c), factory).await,
+        Target::Unread(_) => KnownContracts::embedded().proxy_creation_code(factory),
+    }
+}
+
+/// Who may approve `safe`'s transactions on `target`, and from which nonce:
 /// the deployed Safe's owners, threshold and nonce, or, where it has no code,
 /// what its genesis creates there. `None` when it is neither deployed there
 /// nor recorded anywhere.
+///
+/// On a chain the service does not read, always the genesis's — with nonce 0,
+/// the one this side can stand by; the wallet reads the chain's own.
 ///
 /// `known` is a genesis the caller holds for it (one the mailbox stored, or one
 /// sent with a proposal): used only when the registry has none yet, and only
 /// if it derives `safe` on this chain's factory — so a multisig created a
 /// moment ago, its record still on its way, is not refused.
-pub async fn members(config: &Config, chain: &ChainConfig, safe: Address, known: Option<&Genesis>) -> RpcResult<Option<Members>> {
-    let rpc = Rpc::new(chain);
-    if rpc.code_hash(safe).await?.is_some() {
-        let a = rpc
-            .batch(&[
-                call(safe, &genesis::get_owners_call()),
-                call(safe, &genesis::get_threshold_call()),
-                call(safe, &proposal::nonce_call()),
-            ])
-            .await?;
-        let ok = |i: usize| a[i].as_ref().map_err(Clone::clone);
-        return Ok(Some(Members {
-            deployed: true,
-            owners: genesis::decode_owners(&bytes(ok(0)?)?).map_err(|_| RpcError::InvalidResponse)?,
-            threshold: genesis::decode_threshold(&bytes(ok(1)?)?).map_err(|_| RpcError::InvalidResponse)?,
-            nonce: proposal::decode_nonce(&bytes(ok(2)?)?).map_err(|_| RpcError::InvalidResponse)?,
-        }));
+pub async fn members(config: &Config, target: &Target, safe: Address, known: Option<&Genesis>) -> RpcResult<Option<Members>> {
+    if let Target::Read(chain) = target {
+        let rpc = Rpc::new(chain);
+        if rpc.code_hash(safe).await?.is_some() {
+            let a = rpc
+                .batch(&[
+                    call(safe, &genesis::get_owners_call()),
+                    call(safe, &genesis::get_threshold_call()),
+                    call(safe, &proposal::nonce_call()),
+                ])
+                .await?;
+            let ok = |i: usize| a[i].as_ref().map_err(Clone::clone);
+            return Ok(Some(Members {
+                deployed: true,
+                owners: genesis::decode_owners(&bytes(ok(0)?)?).map_err(|_| RpcError::InvalidResponse)?,
+                threshold: genesis::decode_threshold(&bytes(ok(1)?)?).map_err(|_| RpcError::InvalidResponse)?,
+                nonce: proposal::decode_nonce(&bytes(ok(2)?)?).map_err(|_| RpcError::InvalidResponse)?,
+            }));
+        }
     }
     let l = lookup(config, safe).await;
     match l.record {
         Some((_, r)) if l.verified == Some(true) => Ok(proposal::genesis_members(&r.genesis)),
         Some(_) => Err(RpcError::InvalidResponse),
         None => match known {
-            Some(g) if proxy_code(&rpc, g.factory).await.is_some_and(|code| g.address(&code) == safe) => {
+            Some(g) if factory_proxy_code(target, g.factory).await.is_some_and(|code| g.address(&code) == safe) => {
                 Ok(proposal::genesis_members(g))
             }
             _ if l.unreachable.is_empty() => Ok(None),

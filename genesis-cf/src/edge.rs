@@ -18,6 +18,7 @@ use worker::{Cache, Date, Env, Headers, Method, Request, RequestInit, Response, 
 
 use crate::config::{ChainConfig, Config};
 use crate::reads as registry;
+use crate::reads::Target;
 use crate::rpc::{self, Rpc};
 use crate::signer;
 
@@ -99,19 +100,19 @@ impl Edge {
             }
             (Method::Get, ["api", "proposals", safe]) => {
                 let safe = parse_address(safe)?;
-                let Some(chain) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| self.config.chain(id)) else {
-                    return error_response(400, "chainId is required and must be a configured chain");
+                let Some(target) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&self.config, id)) else {
+                    return error_response(400, "chainId is required");
                 };
-                let (status, body) = self.list_proposals(chain, safe).await?;
+                let (status, body) = self.list_proposals(&target, safe).await?;
                 json_response(status, body)
             }
             (Method::Get, ["api", "proposals", safe, hash]) => {
                 let safe = parse_address(safe)?;
                 let hash: genesis_rules::B256 = hash.parse().map_err(|_| worker::Error::RustError("not a hash".into()))?;
-                let Some(chain) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| self.config.chain(id)) else {
-                    return error_response(400, "chainId is required and must be a configured chain");
+                let Some(target) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&self.config, id)) else {
+                    return error_response(400, "chainId is required");
                 };
-                let (status, body) = self.get_proposal(chain, safe, hash).await?;
+                let (status, body) = self.get_proposal(&target, safe, hash).await?;
                 json_response(status, body)
             }
             _ => error_response(404, "not found"),
@@ -350,9 +351,9 @@ impl Edge {
     // -- the proposal mailbox -------------------------------------------------------------
 
     /// A genesis the caller sent, kept only if it derives `safe` on this chain's factory.
-    async fn derives(&self, chain: &ChainConfig, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
+    async fn derives(&self, target: &Target, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
         let g = g?;
-        let code = registry::proxy_code(&Rpc::new(chain), g.factory).await?;
+        let code = registry::factory_proxy_code(target, g.factory).await?;
         (g.address(&code) == safe).then_some(g)
     }
 
@@ -361,12 +362,12 @@ impl Edge {
         serde_json::from_value(v).ok().flatten()
     }
 
-    async fn members(&self, chain: &ChainConfig, safe: Address, known: Option<Genesis>) -> std::result::Result<Members, (u16, Value)> {
+    async fn members(&self, target: &Target, safe: Address, known: Option<Genesis>) -> std::result::Result<Members, (u16, Value)> {
         let known = match known {
             Some(g) => Some(g),
             None => self.stored_genesis(safe).await,
         };
-        match registry::members(&self.config, chain, safe, known.as_ref()).await {
+        match registry::members(&self.config, target, safe, known.as_ref()).await {
             Ok(Some(m)) => Ok(m),
             Ok(None) => Err(view::unknown_safe()),
             Err(e) => Err(view::error(502, &e.to_string())),
@@ -376,15 +377,15 @@ impl Edge {
     /// Check the approval as the chain would, then merge it where writes to
     /// the mailbox are serialized (the Durable Object).
     async fn propose(&self, r: ProposeRequest) -> Result<(u16, Value)> {
-        let Some(chain) = self.config.chain(r.chain_id) else {
-            return Ok(view::error(400, "chainId is not a configured chain"));
+        let Some(target) = Target::of(&self.config, r.chain_id) else {
+            return Ok(view::error(400, "chainId is not a chain"));
         };
         if let Some(detail) = r.safe_tx.refusal() {
             return Ok(view::proposal_refused(&proposal::Refusal::Transaction { detail: detail.into() }));
         }
         let mut r = r;
-        r.genesis = self.derives(chain, r.safe, r.genesis.take()).await;
-        let members = match self.members(chain, r.safe, r.genesis.clone()).await {
+        r.genesis = self.derives(&target, r.safe, r.genesis.take()).await;
+        let members = match self.members(&target, r.safe, r.genesis.clone()).await {
             Ok(m) => m,
             Err(answer) => return Ok(answer),
         };
@@ -393,7 +394,7 @@ impl Edge {
                 detail: format!("nonce {} is used already (the Safe is at {})", r.safe_tx.nonce, members.nonce),
             }));
         }
-        let Some(code) = registry::proxy_code(&Rpc::new(chain), r.approval.owner_genesis.factory).await else {
+        let Some(code) = registry::factory_proxy_code(&target, r.approval.owner_genesis.factory).await else {
             return Ok(view::error(502, "the owner's factory did not answer proxyCreationCode()"));
         };
         let hash = r.safe_tx.hash(r.chain_id, r.safe);
@@ -410,25 +411,25 @@ impl Edge {
         })
     }
 
-    async fn list_proposals(&self, chain: &ChainConfig, safe: Address) -> Result<(u16, Value)> {
-        let members = match self.members(chain, safe, None).await {
+    async fn list_proposals(&self, target: &Target, safe: Address) -> Result<(u16, Value)> {
+        let members = match self.members(target, safe, None).await {
             Ok(m) => m,
             Err(answer) => return Ok(answer),
         };
         let list: Vec<Proposal> = serde_json::from_value(
-            self.do_json(&format!("/proposal/list?chainId={}&safe={safe}", chain.chain_id)).await?,
+            self.do_json(&format!("/proposal/list?chainId={}&safe={safe}", target.chain_id())).await?,
         )
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
-        Ok(view::proposals(chain.chain_id, safe, &members, &list))
+        Ok(view::proposals(target.chain_id(), safe, &members, &list))
     }
 
-    async fn get_proposal(&self, chain: &ChainConfig, safe: Address, hash: genesis_rules::B256) -> Result<(u16, Value)> {
-        let members = match self.members(chain, safe, None).await {
+    async fn get_proposal(&self, target: &Target, safe: Address, hash: genesis_rules::B256) -> Result<(u16, Value)> {
+        let members = match self.members(target, safe, None).await {
             Ok(m) => m,
             Err(answer) => return Ok(answer),
         };
         let found: Option<Proposal> = serde_json::from_value(
-            self.do_json(&format!("/proposal/get?chainId={}&hash={hash}", chain.chain_id)).await?,
+            self.do_json(&format!("/proposal/get?chainId={}&hash={hash}", target.chain_id())).await?,
         )
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
         Ok(match found {

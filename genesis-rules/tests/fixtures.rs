@@ -170,3 +170,20 @@ fn known_table_covers_the_canonical_safe_deployments() {
         assert!(!known.at(factory.parse().unwrap()).is_empty(), "{factory}");
     }
 }
+
+/// The embedded proxy creation code is each factory's own: every real row
+/// whose factory it knows derives its address from it.
+#[test]
+fn embedded_proxy_code_is_the_factorys() {
+    let known = KnownContracts::embedded();
+    let mut checked = 0;
+    for r in all_rows() {
+        if let Some(code) = known.proxy_creation_code(r.genesis.factory) {
+            assert_eq!(code, r.proxy_code, "{}", r.label);
+            assert_eq!(r.genesis.address(&code), r.proxy, "{}", r.label);
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no row uses a known factory");
+    eprintln!("{checked} rows derive from the embedded proxy code");
+}

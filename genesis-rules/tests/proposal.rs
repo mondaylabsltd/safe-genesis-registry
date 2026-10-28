@@ -135,3 +135,36 @@ fn the_mailbox_holds_no_unbounded_transactions() {
     let r = submit(None, CHAIN, safe, tx, a, &[alice.address], &alice.code, KnownContracts::embedded(), 7);
     assert!(matches!(r, Err(Refusal::Transaction { .. })));
 }
+
+/// On a chain the service reads no RPC for, the owner's factory code is the
+/// known factory's own: an approval there verifies without asking the chain.
+#[test]
+fn an_approval_on_an_unread_chain_verifies_by_the_known_factory() {
+    const BASE: u64 = 8453;
+    let alice = owner(1);
+    let safe = Address::repeat_byte(0x5a);
+    let tx = transfer(0);
+    let hash = tx.hash(BASE, safe);
+    let known = KnownContracts::embedded();
+    let code = known.proxy_creation_code(alice.genesis.factory).expect("a Vela wallet's factory is a known one");
+    assert_eq!(code, alice.code);
+
+    let challenge = owner_message_hash(BASE, alice.address, hash);
+    let auth = auth_data(0x05);
+    let mut message = auth.clone();
+    message.extend_from_slice(&Sha256::digest(client_data_json(challenge, FIELDS).as_bytes()));
+    let sig: Signature = alice.key.sign(&message);
+    let (r, s) = sig.split_bytes();
+    let approval = PasskeyApproval {
+        owner: alice.address,
+        owner_genesis: alice.genesis.clone(),
+        signer: genesis_rules::passkey::SHARED_SIGNER,
+        authenticator_data: auth.into(),
+        client_data_fields: FIELDS.into(),
+        r: U256::from_be_slice(&r),
+        s: U256::from_be_slice(&s),
+    };
+    let (p, outcome) = submit(None, BASE, safe, tx, approval, &[alice.address], &code, known, 7).unwrap();
+    assert_eq!(outcome, Outcome::Created);
+    assert_eq!(p.chain_id, BASE);
+}

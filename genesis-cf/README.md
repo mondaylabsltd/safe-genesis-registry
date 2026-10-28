@@ -161,6 +161,13 @@ re-verifies everything it gets — but it only takes what the chain would.
 - The owners are the deployed Safe's on that chain, or what its genesis
   creates there. `genesis` is optional: a Safe whose record has not landed
   yet is known by it, if it derives the address.
+- `chainId` is any chain, not only a configured one: a wallet proposes
+  wherever its owners have added a network. On a chain the service has no
+  RPC for, the owners are always the genesis's, the address is derived with
+  the known factory's own proxy code (`genesis-rules/data/proxy-creation-code.json`),
+  and the nonce is not checked (`members.nonce` is `0`; the wallet reads the
+  chain's own). The chain stays the last word at execution. A Safe whose
+  owners changed on such a chain is judged by its genesis there.
 - `201 {"status": "created", "proposal"}` · `200 {"status": "approved" | "unchanged", "proposal"}` ·
   `422 {"refusal"}` (`transaction`, `approval` with the reason, `full`) ·
   `404` for a Safe nobody can say the owners of.
