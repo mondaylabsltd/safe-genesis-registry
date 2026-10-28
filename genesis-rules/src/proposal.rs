@@ -163,7 +163,7 @@ pub struct EcdsaApproval {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Approval {
-    Passkey(PasskeyApproval),
+    Passkey(Box<PasskeyApproval>),
     Ecdsa(EcdsaApproval),
 }
 
@@ -187,7 +187,7 @@ impl Approval {
 
 impl From<PasskeyApproval> for Approval {
     fn from(a: PasskeyApproval) -> Self {
-        Self::Passkey(a)
+        Self::Passkey(Box::new(a))
     }
 }
 
