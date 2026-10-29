@@ -23,26 +23,61 @@ The same service also runs as a single container: [`genesis-server`](../genesis-
 
 All responses are JSON; addresses in paths may be in any case.
 
+Conventions, the same on every route:
+
+- An error is `{"error": "<message>"}`; a request the rules refuse (an import,
+  a proposal) is `422 {"refusal": {…}}`.
+- `404` means every registry answered that it holds nothing. When a registry
+  could not be read (an RPC down, or the configured address holding no
+  registry or another version of it), the answer is `502`, never `404`.
+- Chain ids, block numbers, indexes and counts are JSON numbers; `uint256`
+  values (salt nonces, thresholds, Safe nonces) are `0x` hex strings.
+
+The registry lives on the chains marked `registry` in `CHAINS` (Gnosis and
+Ethereum) and on the home chain; lookups read only those. The other chains are
+read for deployments, replays and members.
+
 ### `GET /api/genesis/{safe}`
 
-The Safe's genesis from whichever chains hold it (home chain preferred).
+The Safe's genesis from whichever registries hold it (home chain preferred).
 `verified` re-derives the address from the record and the factory's proxy
-code on the chain it was read from.
+code on the chain it was read from. The genesis is the same in every
+registry; the name, `index` and dates are each registry's own, listed under
+`registries`. `nameBySafe` says whether a name is the Safe's own (it renamed
+itself, or wrote the record); otherwise the first writer chose it and a
+wallet should say so.
 
 ```json
 {
   "safe": "0x0f9a…0725", "found": true,
   "recordedOn": [100], "readFrom": 100, "verified": true,
-  "genesis": {"factory": "0x…", "singleton": "0x…", "saltNonce": "0x…", "initializer": "0x…"},
+  "genesis": {"factory": "0x…", "singleton": "0x…", "saltNonce": "0x…", "initializer": "0x…", "name": "Team fund"},
   "proxyCreationCodeHash": "0x…", "recorder": "0x…", "recordedAt": 48965199,
+  "index": 41, "renamedAt": 0, "nameBySafe": false,
+  "registries": [{"chainId": 100, "name": "Team fund", "nameBySafe": false, "renamedAt": 0,
+                  "index": 41, "recorder": "0x…", "recordedAt": 48965199}],
   "setup": {"owners": ["0x…"], "threshold": "0x3", "to": "0x…", "data": "0x", "fallbackHandler": "0x…", …},
   "setupDefects": [],
   "deployCall": {"to": "<factory>", "data": "<createProxyWithNonce calldata>"}
 }
 ```
 
-`404` with `"found": false` when no chain holds it; `unreachable` lists chains
-that did not answer.
+`404` with `"found": false` when no registry holds it; `502` with
+`unreachable` when none was found and a registry could not be read.
+
+A Safe renames itself with a Safe transaction `{to: <registry>, data:
+rename(name)}` on the registry's chain, proposed and approved like any other
+(the mailbox below); it must be deployed there.
+
+### `GET /api/registry/{chainId}?offset=0&limit=20&order=newest|oldest`
+
+One page of a registry's records in write order, newest first by default:
+`{chainId, total, offset, limit, order, records: [{safe, index, name,
+nameBySafe, renamedAt, recorder, recordedAt, singleton, owners, threshold,
+genesis, proxyCreationCodeHash}]}`. `limit` is 1 to 100; `400` for a chain
+without a registry. A page the node refuses whole (a gas cap reached by large
+initializers) is read in smaller parts. Records written while a page is read
+in parts may shift it; `total` says how many there were.
 
 ### `GET /api/safe/{safe}/chains`
 
@@ -191,9 +226,10 @@ a registry holds the record.
 
 ### Caching
 
-Responses carry `x-cache: hit | miss`. A found genesis is cached for an hour
-(a record never changes), "not found" for 15 s (so an import shows up a moment
-later), per-chain status and replay checks for 30 s. Nothing assembled while a
+Responses carry `x-cache: hit | miss`. A found genesis is cached for 5 minutes
+(the genesis never changes, its name can: a rename shows within that), "not
+found" for 15 s (so an import shows up a moment later), per-chain status and
+replay checks for 30 s, registry pages for 15 s. Nothing assembled while a
 chain failed to answer is cached. An import drops the Safe's cached lookups.
 
 ### Alerts
@@ -210,7 +246,11 @@ over Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set;
 
 The import task (`queued` → `submitted` → `done` | `failed`, with `txHash`,
 the stored `broadcast`, `attempts`, `errors`, `error`), and the service's
-configuration, sponsor address and queue counts. A signed transaction is
+configuration, sponsor address and queue counts. Health's `registries` checks
+each registry chain: `ok` when the address holds this service's version of the
+contract (`genesis_rules::genesis::REGISTRY_CODE_HASH`), else `not deployed`,
+`different code…` or `unreachable`. Lookups make the same check once per chain
+and refuse to read anything else. A signed transaction is
 stored before it is sent; one without a receipt is rebroadcast after a
 minute and replaced at the same nonce (+25% fees) after three.
 
@@ -224,7 +264,7 @@ minute and replaced at the same nonce (+25% fees) after three.
 | `MAX_FEE_WEI` | var | `10000000` (0.01 gwei): above it nothing is sent, the task waits |
 | `MIN_SPONSOR_BALANCE_WEI` | var | `10000000000000000` (0.01): the low-balance alert's floor |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | secrets | none: alerts are only listed in `/api/health` |
-| `CHAINS` | var | `genesis-rules/data/chains.json`: `[{"chainId", "name", "rpcs": [..], "txService"}]` |
+| `CHAINS` | var | `genesis-rules/data/chains.json`: `[{"chainId", "name", "rpcs": [..], "txService", "registry"}]`; `registry: true` where the registry is deployed (Gnosis, Ethereum) |
 
 ## Run it
 

@@ -1,8 +1,10 @@
 //! How long each response may be served from cache.
 //!
-//! A genesis, once in the registry, never changes, so a found one is cached
-//! long. "Not found" is cached briefly, so a Safe imported a moment ago shows
-//! up a moment later. Per-chain status and replay checks follow live chain
+//! A genesis, once in the registry, never changes, but its name can: the Safe
+//! may rename itself. So a found one is cached for minutes, which bounds how
+//! long a rename takes to show. "Not found" is cached briefly, so a Safe
+//! imported a moment ago shows up a moment later. A registry page holds the
+//! newest records and names, so it follows the chain closely. Per-chain status and replay checks follow live chain
 //! state (deployments, owner changes) and are cached briefly too. An answer
 //! assembled while some chain did not respond is never cached: it may be
 //! missing what that chain holds.
@@ -16,9 +18,10 @@ pub enum Endpoint {
     Replay { chain_id: u64 },
 }
 
-pub const FOUND_TTL_SECS: u32 = 3_600;
+pub const FOUND_TTL_SECS: u32 = 300;
 pub const NOT_FOUND_TTL_SECS: u32 = 15;
 pub const LIVE_TTL_SECS: u32 = 30;
+pub const PAGE_TTL_SECS: u32 = 15;
 
 /// What a response was built from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +59,12 @@ pub fn key(endpoint: Endpoint, registry: Address, safe: Address) -> String {
         Endpoint::Chains => format!("{base}/chains/{safe:#x}"),
         Endpoint::Replay { chain_id } => format!("{base}/replay/{safe:#x}/{chain_id}"),
     }
+}
+
+/// The cache key of one registry page.
+pub fn page_key(registry: Address, chain_id: u64, offset: u64, limit: u64, desc: bool) -> String {
+    let order = if desc { "newest" } else { "oldest" };
+    format!("https://cache.safe-genesis.invalid/v1/{registry:#x}/page/{chain_id}/{order}/{offset}/{limit}")
 }
 
 /// What an import invalidates where it is handled. Elsewhere (another Workers

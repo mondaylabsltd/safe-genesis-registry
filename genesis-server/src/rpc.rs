@@ -13,6 +13,9 @@ pub enum RpcError {
     Unavailable,
     Rejected(String),
     InvalidResponse,
+    /// The endpoint answered, but the contract's answer is not what this
+    /// service reads there: no contract, or another version of it.
+    Contract(String),
 }
 
 impl std::fmt::Display for RpcError {
@@ -21,6 +24,7 @@ impl std::fmt::Display for RpcError {
             RpcError::Unavailable => write!(f, "no RPC endpoint answered"),
             RpcError::Rejected(m) => write!(f, "RPC rejected the request: {m}"),
             RpcError::InvalidResponse => write!(f, "RPC answered something unreadable"),
+            RpcError::Contract(m) => write!(f, "{m}"),
         }
     }
 }

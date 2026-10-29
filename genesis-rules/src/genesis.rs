@@ -1,6 +1,6 @@
 //! The genesis value and the registry's wire format.
 
-use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
+use alloy::primitives::{Address, B256, Bytes, U256, b256, keccak256};
 use alloy::sol_types::{SolCall, SolEvent};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,16 @@ pub const MAX_INITIALIZER_LENGTH: usize = 8_192;
 
 /// The registry's `MAX_NAME_LENGTH`, in bytes.
 pub const MAX_NAME_LENGTH: usize = 64;
+
+/// keccak256 of the registry's runtime code (v4, `contracts/`): what an
+/// address must hold for this crate's calls and decoders to read it.
+/// `contracts/e2e/local.sh` checks it against the build.
+pub const REGISTRY_CODE_HASH: B256 = b256!("3617af38a7d99dff102406468de5ef9c5aad77af73d91fee74c80e56b021edd9");
+
+/// `genesisPage` limits the API applies: a page's cost grows with its
+/// records' initializers, and 100 full ones exceed common `eth_call` caps.
+pub const PAGE_LIMIT_DEFAULT: u64 = 20;
+pub const PAGE_LIMIT_MAX: u64 = 100;
 
 /// The creation parameters of one Safe: what the registry stores per address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +95,12 @@ pub struct Recorded {
 }
 
 impl Recorded {
+    /// Whether the name is the Safe's own: it renamed itself, or it wrote the
+    /// record. Otherwise the first writer chose it, and it proves nothing.
+    pub fn name_by_safe(&self, safe: Address) -> bool {
+        self.renamed_at > 0 || self.recorder == safe
+    }
+
     /// Whether this record really belongs to `safe`. The registry guarantees
     /// it for its own storage; this is the check for a record that came from
     /// anywhere else (an index, a cache, a peer): it needs the factory's proxy
@@ -126,6 +142,48 @@ pub fn decode_genesis_of(ret: &[u8]) -> Result<Option<Recorded>, alloy::sol_type
         return Ok(None);
     }
     Ok(Some(from_abi(r.genesis)))
+}
+
+/// `?offset&limit&order` of a registry page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageQuery {
+    pub offset: u64,
+    pub limit: u64,
+    pub desc: bool,
+}
+
+impl PageQuery {
+    pub fn parse(offset: Option<String>, limit: Option<String>, order: Option<String>) -> Result<Self, String> {
+        let offset = match offset {
+            None => 0,
+            Some(v) => v.parse().map_err(|_| "offset must be a number".to_owned())?,
+        };
+        let limit = match limit {
+            None => PAGE_LIMIT_DEFAULT,
+            Some(v) => v.parse::<u64>().ok().filter(|l| (1..=PAGE_LIMIT_MAX).contains(l)).ok_or(format!("limit must be 1 to {PAGE_LIMIT_MAX}"))?,
+        };
+        let desc = match order.as_deref() {
+            None | Some("newest") => true,
+            Some("oldest") => false,
+            Some(_) => return Err("order must be newest or oldest".into()),
+        };
+        Ok(Self { offset, limit, desc })
+    }
+}
+
+/// `genesisPage(offset, limit, desc)` calldata.
+pub fn genesis_page_call(offset: u64, limit: u64, desc: bool) -> Bytes {
+    ISafeGenesisRegistry::genesisPageCall { offset: U256::from(offset), limit: U256::from(limit), desc }.abi_encode().into()
+}
+
+/// A `genesisPage` response: the registry's total, and each Safe with its record.
+pub fn decode_genesis_page(ret: &[u8]) -> Result<(u64, Vec<(Address, Recorded)>), alloy::sol_types::Error> {
+    let r = ISafeGenesisRegistry::genesisPageCall::abi_decode_returns(ret)?;
+    let total = u64::try_from(r.total).map_err(|_| alloy::sol_types::Error::custom("total over u64"))?;
+    if r.safes.len() != r.records.len() {
+        return Err(alloy::sol_types::Error::custom("safes and records differ in length"));
+    }
+    Ok((total, r.safes.into_iter().zip(r.records.into_iter().map(from_abi)).collect()))
 }
 
 /// `isRecorded(safe)` calldata and its decoder.

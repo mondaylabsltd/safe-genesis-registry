@@ -25,6 +25,9 @@ pub struct Lookup {
     /// genesis, so every chain's record is the same; the choice only decides
     /// whose RPC verifies it.
     pub record: Option<(u64, Recorded)>,
+    /// Every registry's record, by chain: the genesis is the same in each,
+    /// the name, index and dates are each registry's own.
+    pub records: Vec<(u64, Recorded)>,
     pub recorded_on: Vec<u64>,
     pub unreachable: Vec<Unreachable>,
     /// Whether the served record re-derives the Safe's address with the
@@ -39,6 +42,7 @@ impl Lookup {
             match answer {
                 Ok(Some(r)) => {
                     out.recorded_on.push(chain_id);
+                    out.records.push((chain_id, r.clone()));
                     if out.record.is_none() || chain_id == home_chain_id {
                         out.record = Some((chain_id, r));
                     }
@@ -48,6 +52,7 @@ impl Lookup {
             }
         }
         out.recorded_on.sort_unstable();
+        out.records.sort_unstable_by_key(|(chain_id, _)| *chain_id);
         out
     }
 
@@ -63,6 +68,12 @@ impl Lookup {
     /// (a factory that did not answer leaves `verified` unset).
     pub fn is_complete(&self) -> bool {
         self.unreachable.is_empty() && (self.record.is_none() || self.verified.is_some())
+    }
+
+    /// No record, and some registry did not answer: "not recorded" cannot be
+    /// said, only "could not read".
+    pub fn is_unknown(&self) -> bool {
+        self.record.is_none() && !self.unreachable.is_empty()
     }
 
     /// The home chain holds the record and it re-verified.

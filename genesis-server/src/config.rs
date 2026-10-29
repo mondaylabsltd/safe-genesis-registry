@@ -10,7 +10,11 @@ pub struct ChainConfig {
     pub chain_id: u64,
     pub name: String,
     pub rpcs: Vec<String>,
-    pub tx_service: Option<String>,
+    pub tx_service: Option<String>,    /// The registry is deployed here (Gnosis and Ethereum). Lookups read
+    /// only these chains; the others are read for deployments and replays.
+    /// The home chain always counts as one.
+    #[serde(default)]
+    pub registry: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +62,16 @@ impl Config {
 
     pub fn chain(&self, chain_id: u64) -> Option<&ChainConfig> {
         self.chains.iter().find(|c| c.chain_id == chain_id)
+    }
+
+    /// The chains whose registry lookups read: the home chain and every chain
+    /// marked `registry`.
+    pub fn registry_chains(&self) -> impl Iterator<Item = &ChainConfig> {
+        self.chains.iter().filter(|c| c.registry || c.chain_id == self.home_chain_id)
+    }
+
+    pub fn is_registry_chain(&self, chain_id: u64) -> bool {
+        self.registry_chains().any(|c| c.chain_id == chain_id)
     }
 
     pub fn home(&self) -> &ChainConfig {

@@ -55,6 +55,9 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL  $*"; }
 eq()  { if [ "$(echo "$2" | tr A-F a-f)" == "$(echo "$3" | tr A-F a-f)" ]; then ok "$1"; else bad "$1: got [$2] want [$3]"; fi; }
 
 eq "runtime code == this build" "$(cast code $R --rpc-url $RPC)" "$(forge inspect SafeGenesisRegistry deployedBytecode)"
+eq "the services' REGISTRY_CODE_HASH == this build" \
+  "$(grep -oE 'REGISTRY_CODE_HASH: B256 = b256!\("[0-9a-f]{64}' ../genesis-rules/src/genesis.rs | grep -oE '[0-9a-f]{64}$' | sed 's/^/0x/')" \
+  "$(cast keccak "$(cast code $R --rpc-url $RPC)")"
 eq "VERSION" "$(cast call $R 'VERSION()(uint8)' --rpc-url $RPC)" "$(grep -oE 'VERSION = [0-9]+' src/SafeGenesisRegistry.sol | grep -oE '[0-9]+')"
 eq "starts empty" "$(cast call $R 'totalRecords()(uint256)' --rpc-url $RPC)" 0
 F=$(forge create test/fixtures/SafeLike.sol:SafeLikeProxyFactory --rpc-url $RPC --private-key $K0 --broadcast 2>&1 | grep "Deployed to" | awk '{print $3}')

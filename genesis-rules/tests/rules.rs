@@ -545,3 +545,119 @@ fn a_named_record_round_trips_and_records_by_name() {
     assert_eq!(serde_json::from_value::<Genesis>(json).unwrap(), g);
     assert!(serde_json::to_value(two_of_three()).unwrap().get("name").is_none());
 }
+
+// -- the registry API (v4) --------------------------------------------------------
+
+fn abi_record(g: &Genesis, recorder: Address, renamed_at: u64, index: u32, name: &str) -> ISafeGenesisRegistry::Genesis {
+    ISafeGenesisRegistry::Genesis {
+        factory: g.factory,
+        singleton: g.singleton,
+        renamedAt: renamed_at,
+        saltNonce: g.salt_nonce,
+        initializer: g.initializer.clone(),
+        proxyCreationCodeHash: keccak256(proxy_code()),
+        recorder,
+        recordedAt: 42,
+        index,
+        name: name.into(),
+    }
+}
+
+fn recorded(g: &Genesis, recorder: Address, renamed_at: u64, index: u32, name: &str) -> genesis::Recorded {
+    genesis::decode_genesis_of(&(true, abi_record(g, recorder, renamed_at, index, name)).abi_encode_params()).unwrap().unwrap()
+}
+
+#[test]
+fn a_name_is_the_safes_own_when_it_renamed_itself_or_wrote_the_record() {
+    let g = two_of_three();
+    let safe = g.address(&proxy_code());
+    assert!(!recorded(&g, OWNER_A, 0, 0, "Squatted").name_by_safe(safe), "a stranger's name");
+    assert!(recorded(&g, OWNER_A, 7, 0, "Renamed").name_by_safe(safe), "renamed by the Safe");
+    assert!(recorded(&g, safe, 0, 0, "Self-recorded").name_by_safe(safe), "the Safe wrote it");
+}
+
+#[test]
+fn a_registry_page_decodes_in_order() {
+    let a = genesis_of(&setup(vec![OWNER_A], 1), 1);
+    let b = genesis_of(&setup(vec![OWNER_B], 1), 2);
+    let (sa, sb) = (a.address(&proxy_code()), b.address(&proxy_code()));
+    let ret = (U256::from(9), vec![sb, sa], vec![abi_record(&b, OWNER_C, 0, 8, "B"), abi_record(&a, OWNER_C, 0, 7, "A")])
+        .abi_encode_params();
+    let (total, page) = genesis::decode_genesis_page(&ret).unwrap();
+    assert_eq!(total, 9);
+    assert_eq!(page.iter().map(|(s, r)| (*s, r.index)).collect::<Vec<_>>(), vec![(sb, 8), (sa, 7)]);
+    assert_eq!(page[1].1.genesis, Genesis { name: Some("A".into()), ..a });
+    let call = ISafeGenesisRegistry::genesisPageCall::abi_decode(&genesis::genesis_page_call(20, 50, true)).unwrap();
+    assert_eq!((call.offset, call.limit, call.desc), (U256::from(20), U256::from(50), true));
+    let lopsided = (U256::from(1), vec![sa], Vec::<ISafeGenesisRegistry::Genesis>::new()).abi_encode_params();
+    assert!(genesis::decode_genesis_page(&lopsided).is_err());
+}
+
+#[test]
+fn page_queries() {
+    use genesis_rules::genesis::PageQuery;
+    let q = |o: Option<&str>, l: Option<&str>, d: Option<&str>| PageQuery::parse(o.map(Into::into), l.map(Into::into), d.map(Into::into));
+    assert_eq!(q(None, None, None), Ok(PageQuery { offset: 0, limit: 20, desc: true }));
+    assert_eq!(q(Some("40"), Some("100"), Some("oldest")), Ok(PageQuery { offset: 40, limit: 100, desc: false }));
+    assert!(q(None, Some("0"), None).is_err());
+    assert!(q(None, Some("101"), None).is_err());
+    assert!(q(Some("-1"), None, None).is_err());
+    assert!(q(None, None, Some("random")).is_err());
+}
+
+#[test]
+fn lookups_say_unreadable_never_not_found_when_a_registry_did_not_answer() {
+    use genesis_rules::lookup::{ChainAnswer, Lookup};
+    let g = two_of_three();
+    let safe = g.address(&proxy_code());
+    // Gnosis answered "nothing", Ethereum could not be read: not a 404.
+    let l = Lookup::merge(
+        vec![ChainAnswer { chain_id: 100, answer: Ok(None) }, ChainAnswer { chain_id: 1, answer: Err("no registry contract at this address".into()) }],
+        100,
+    );
+    assert!(l.is_unknown());
+    let (status, body) = genesis_rules::view::genesis(safe, &l);
+    assert_eq!(status, 502);
+    assert_eq!(body["unreachable"][0]["chainId"], 1);
+    // Every registry answered "nothing": a 404.
+    let l = Lookup::merge(vec![ChainAnswer { chain_id: 100, answer: Ok(None) }, ChainAnswer { chain_id: 1, answer: Ok(None) }], 100);
+    assert!(!l.is_unknown());
+    assert_eq!(genesis_rules::view::genesis(safe, &l).0, 404);
+    // Found on one registry while the other failed: the record is served.
+    let l = Lookup::merge(
+        vec![ChainAnswer { chain_id: 100, answer: Ok(Some(recorded(&g, OWNER_A, 0, 3, "Gnosis name"))) }, ChainAnswer { chain_id: 1, answer: Err("down".into()) }],
+        100,
+    );
+    assert_eq!(genesis_rules::view::genesis(safe, &l).0, 200);
+}
+
+#[test]
+fn each_registry_keeps_its_own_name() {
+    use genesis_rules::lookup::{ChainAnswer, Lookup};
+    let g = two_of_three();
+    let safe = g.address(&proxy_code());
+    let l = Lookup::merge(
+        vec![
+            ChainAnswer { chain_id: 1, answer: Ok(Some(recorded(&g, safe, 0, 0, "Mine"))) },
+            ChainAnswer { chain_id: 100, answer: Ok(Some(recorded(&g, OWNER_A, 0, 41, "Squatted"))) },
+        ],
+        100,
+    );
+    let (status, body) = genesis_rules::view::genesis(safe, &l);
+    assert_eq!(status, 200);
+    assert_eq!(body["readFrom"], 100, "the home chain's record is served");
+    assert_eq!(body["nameBySafe"], false);
+    let regs = body["registries"].as_array().unwrap();
+    assert_eq!(regs.len(), 2);
+    assert_eq!((regs[0]["chainId"].as_u64(), regs[0]["name"].as_str(), regs[0]["nameBySafe"].as_bool()), (Some(1), Some("Mine"), Some(true)));
+    assert_eq!((regs[1]["chainId"].as_u64(), regs[1]["index"].as_u64(), regs[1]["nameBySafe"].as_bool()), (Some(100), Some(41), Some(false)));
+}
+
+#[test]
+fn registry_status_names_the_problem() {
+    use genesis_rules::view::registry_status;
+    assert_eq!(registry_status(100, Ok(Some(genesis::REGISTRY_CODE_HASH)))["status"], "ok");
+    assert_eq!(registry_status(100, Ok(None))["status"], "not deployed");
+    assert!(registry_status(100, Ok(Some(B256::ZERO)))["status"].as_str().unwrap().starts_with("different code"));
+    assert_eq!(registry_status(100, Err("down".into()))["status"], "unreachable");
+}

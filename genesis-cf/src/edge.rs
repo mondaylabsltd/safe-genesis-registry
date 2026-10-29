@@ -48,6 +48,17 @@ impl Edge {
         match (req.method(), segments.as_slice()) {
             (Method::Get, []) => json_response(200, json!({"service": "safe-genesis-registry", "docs": "/api/health"})),
             (Method::Get, ["api", "health"]) => self.health().await,
+            (Method::Get, ["api", "registry", chain_id]) => {
+                let Some(chain) = chain_id.parse().ok().filter(|id| self.config.is_registry_chain(*id)).and_then(|id| self.config.chain(id)) else {
+                    return error_response(400, "not a chain this service's registry is deployed on");
+                };
+                let page = match genesis_rules::genesis::PageQuery::parse(query(&url, "offset"), query(&url, "limit"), query(&url, "order")) {
+                    Ok(p) => p,
+                    Err(e) => return error_response(400, &e),
+                };
+                let key = cache::page_key(self.config.registry, chain.chain_id, page.offset, page.limit, page.desc);
+                self.cached_key(key, || self.registry_page(chain, page)).await
+            }
             (Method::Get, ["api", "genesis", safe]) => {
                 let safe = parse_address(safe)?;
                 self.cached(Endpoint::Genesis, safe, || self.genesis(safe)).await
@@ -108,7 +119,7 @@ impl Edge {
             }
             (Method::Get, ["api", "proposals", safe, hash]) => {
                 let safe = parse_address(safe)?;
-                let hash: genesis_rules::B256 = hash.parse().map_err(|_| worker::Error::RustError("not a hash".into()))?;
+                let Ok(hash) = hash.parse::<genesis_rules::B256>() else { return error_response(400, "not a hash") };
                 let Some(target) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&self.config, id)) else {
                     return error_response(400, "chainId is required");
                 };
@@ -126,7 +137,14 @@ impl Edge {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Answer>>,
     {
-        let key = cache::key(endpoint, self.config.registry, safe);
+        self.cached_key(cache::key(endpoint, self.config.registry, safe), compute).await
+    }
+
+    async fn cached_key<F, Fut>(&self, key: String, compute: F) -> Result<Response>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Answer>>,
+    {
         if let Some(mut hit) = Cache::default().get(key.as_str(), false).await? {
             #[derive(Deserialize)]
             struct Envelope {
@@ -162,6 +180,7 @@ impl Edge {
     async fn health(&self) -> Result<Response> {
         let sponsor = self.config.private_key.as_deref().and_then(|k| signer::address(k).ok());
         let queue = self.do_json("/stats").await.unwrap_or(Value::Null);
+        let registries = registry::registry_status(&self.config).await;
         json_response(
             200,
             json!({
@@ -170,7 +189,8 @@ impl Edge {
                 "version": env!("CARGO_PKG_VERSION"),
                 "registry": self.config.registry,
                 "homeChainId": self.config.home_chain_id,
-                "chains": self.config.chains.iter().map(|c| json!({"chainId": c.chain_id, "name": c.name})).collect::<Vec<_>>(),
+                "chains": self.config.chains.iter().map(|c| json!({"chainId": c.chain_id, "name": c.name, "registry": self.config.is_registry_chain(c.chain_id)})).collect::<Vec<_>>(),
+                "registries": registries,
                 "sponsor": sponsor,
                 "alertsConfigured": self.config.telegram_bot_token.is_some() && self.config.telegram_chat_id.is_some(),
                 "queue": queue,
@@ -198,6 +218,10 @@ impl Edge {
     async fn chains(&self, safe: Address) -> Result<Answer> {
         let l = registry::lookup(&self.config, safe).await;
         let mut basis = l.basis(self.config.home_chain_id);
+        if l.is_unknown() {
+            let (status, body) = view::unreadable(safe, &l);
+            return Ok(Answer { status, body, ttl_secs: None });
+        }
         if l.record.is_none() {
             let (status, body) = view::no_genesis();
             return Ok(Answer { status, body, ttl_secs: cache::ttl_secs(Endpoint::Chains, basis) });
@@ -222,6 +246,10 @@ impl Edge {
 
     async fn replay(&self, safe: Address, chain: &ChainConfig) -> Result<Answer> {
         let l = registry::lookup(&self.config, safe).await;
+        if l.is_unknown() {
+            let (status, body) = view::unreadable(safe, &l);
+            return Ok(Answer { status, body, ttl_secs: None });
+        }
         let Some((_, r)) = &l.record else {
             let (status, body) = view::no_genesis();
             return Ok(Answer { status, body, ttl_secs: None });
@@ -243,6 +271,20 @@ impl Edge {
         let (_, body) = view::replay(safe, chain.chain_id, &l, &facts).expect("record present");
         let ttl = cache::ttl_secs(Endpoint::Replay { chain_id: chain.chain_id }, l.basis(self.config.home_chain_id));
         Ok(Answer { status: 200, body, ttl_secs: ttl })
+    }
+
+    async fn registry_page(&self, chain: &ChainConfig, q: genesis_rules::genesis::PageQuery) -> Result<Answer> {
+        Ok(match registry::registry_page(chain, self.config.registry, q.offset, q.limit, q.desc).await {
+            Ok((total, page)) => Answer {
+                status: 200,
+                body: view::registry_page(chain.chain_id, total, q.offset, q.limit, q.desc, &page),
+                ttl_secs: Some(cache::PAGE_TTL_SECS),
+            },
+            Err(e) => {
+                let (status, body) = view::error(502, &e.to_string());
+                Answer { status, body, ttl_secs: None }
+            }
+        })
     }
 
     // -- import -------------------------------------------------------------------------

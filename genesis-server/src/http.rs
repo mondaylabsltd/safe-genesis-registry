@@ -54,7 +54,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
         let work = async {
             match (method, segs.as_slice()) {
                 (Method::GET, []) => reply(200, json!({"service": "safe-genesis-registry", "docs": "/api/health"})),
-                (Method::GET, ["api", "health"]) => health(&app),
+                (Method::GET, ["api", "health"]) => health(&app).await,
                 (Method::GET, ["api", "genesis", safe]) => match safe.parse() {
                     Ok(safe) => cached(&app, Endpoint::Genesis, safe, || genesis(&app, safe)).await,
                     Err(_) => reply(400, json!({"error": "not an address"})),
@@ -70,6 +70,18 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                         return reply(400, json!({"error": "chainId is required and must be a configured chain"}));
                     };
                     cached(&app, Endpoint::Replay { chain_id: chain.chain_id }, safe, || replay(&app, safe, chain.clone())).await
+                }
+                (Method::GET, ["api", "registry", chain_id]) => {
+                    let Some(chain) = chain_id.parse().ok().filter(|id| app.config.is_registry_chain(*id)).and_then(|id| app.config.chain(id)).cloned()
+                    else {
+                        return reply(400, json!({"error": "not a chain this service's registry is deployed on"}));
+                    };
+                    let page = match genesis_rules::genesis::PageQuery::parse(query("offset"), query("limit"), query("order")) {
+                        Ok(p) => p,
+                        Err(e) => return reply(400, json!({"error": e})),
+                    };
+                    let key = cache::page_key(app.config.registry, chain.chain_id, page.offset, page.limit, page.desc);
+                    cached_key(&app, key, || registry_page(&app, chain.clone(), page)).await
                 }
                 (Method::POST, ["api", "import"]) => {
                     if declared.is_some_and(|l| l > MAX_BODY) {
@@ -139,7 +151,14 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = (u16, Value, Option<u32>)>,
 {
-    let key = cache::key(endpoint, app.config.registry, safe);
+    cached_key(app, cache::key(endpoint, app.config.registry, safe), compute).await
+}
+
+async fn cached_key<F, Fut>(app: &App, key: String, compute: F) -> Response
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = (u16, Value, Option<u32>)>,
+{
     if let Some((status, body)) = app.cache.get(&key) {
         let mut r = reply(status, body);
         r.headers_mut().insert("x-cache", HeaderValue::from_static("hit"));
@@ -154,8 +173,9 @@ where
     r
 }
 
-fn health(app: &App) -> Response {
+async fn health(app: &App) -> Response {
     let c = &app.config;
+    let registries = registry::registry_status(c).await;
     let mut queue = serde_json::Map::new();
     for (k, v) in app.store.counts().unwrap_or_default() {
         queue.insert(k, json!(v));
@@ -169,7 +189,8 @@ fn health(app: &App) -> Response {
             "version": env!("CARGO_PKG_VERSION"),
             "registry": c.registry,
             "homeChainId": c.home_chain_id,
-            "chains": c.chains.iter().map(|x| json!({"chainId": x.chain_id, "name": x.name})).collect::<Vec<_>>(),
+            "chains": c.chains.iter().map(|x| json!({"chainId": x.chain_id, "name": x.name, "registry": c.is_registry_chain(x.chain_id)})).collect::<Vec<_>>(),
+            "registries": registries,
             "sponsor": c.private_key.as_deref().and_then(|k| signer::address(k).ok()),
             "alertsConfigured": c.telegram_bot_token.is_some() && c.telegram_chat_id.is_some(),
             "queue": queue,
@@ -178,8 +199,17 @@ fn health(app: &App) -> Response {
     )
 }
 
+/// A registry that could not be read is an operator's problem (an RPC down,
+/// or the wrong address or version configured): said in the log too.
+fn log_unreachable(l: &Lookup, safe: Address) {
+    for u in &l.unreachable {
+        tracing::warn!(chain = u.chain_id, %safe, error = %u.error, "registry not read");
+    }
+}
+
 async fn genesis(app: &App, safe: Address) -> (u16, Value, Option<u32>) {
     let l = registry::lookup(&app.config, safe).await;
+    log_unreachable(&l, safe);
     if l.record.is_none()
         && l.unreachable.is_empty()
         && let Ok(Some(g)) = app.store.mailbox_genesis(safe)
@@ -194,7 +224,12 @@ async fn genesis(app: &App, safe: Address) -> (u16, Value, Option<u32>) {
 
 async fn chains(app: &App, safe: Address) -> (u16, Value, Option<u32>) {
     let l = registry::lookup(&app.config, safe).await;
+    log_unreachable(&l, safe);
     let mut basis = l.basis(app.config.home_chain_id);
+    if l.is_unknown() {
+        let (status, body) = view::unreadable(safe, &l);
+        return (status, body, None);
+    }
     if l.record.is_none() {
         let (status, body) = view::no_genesis();
         return (status, body, cache::ttl_secs(Endpoint::Chains, basis));
@@ -219,6 +254,11 @@ async fn chain_row(c: &ChainConfig, l: &Lookup, safe: Address, sources: &registr
 
 async fn replay(app: &App, safe: Address, c: ChainConfig) -> (u16, Value, Option<u32>) {
     let l = registry::lookup(&app.config, safe).await;
+    log_unreachable(&l, safe);
+    if l.is_unknown() {
+        let (status, body) = view::unreadable(safe, &l);
+        return (status, body, None);
+    }
     let Some((_, r)) = &l.record else {
         let (status, body) = view::no_genesis();
         return (status, body, None);
@@ -516,5 +556,18 @@ fn task(app: &App, id: &str) -> Response {
         Ok(Some(t)) => reply(200, serde_json::to_value(t).unwrap_or(Value::Null)),
         Ok(None) => reply(404, json!({"error": "unknown task"})),
         Err(e) => reply(500, json!({"error": format!("store: {e}")})),
+    }
+}
+
+async fn registry_page(app: &App, chain: ChainConfig, q: genesis_rules::genesis::PageQuery) -> (u16, Value, Option<u32>) {
+    match registry::registry_page(&chain, app.config.registry, q.offset, q.limit, q.desc).await {
+        Ok((total, page)) => {
+            (200, view::registry_page(chain.chain_id, total, q.offset, q.limit, q.desc, &page), Some(cache::PAGE_TTL_SECS))
+        }
+        Err(e) => {
+            tracing::warn!(chain = chain.chain_id, error = %e, "registry page not read");
+            let (status, body) = view::error(502, &e.to_string());
+            (status, body, None)
+        }
     }
 }

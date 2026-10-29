@@ -10,7 +10,7 @@ use genesis_rules::known::KnownContracts;
 use genesis_rules::lookup::{ChainAnswer, Lookup};
 use genesis_rules::proposal::{self, Members};
 use genesis_rules::replay::{self, OwnerFact, SafeState, TargetFacts, addresses_to_read, plan};
-use genesis_rules::{Address, B256, Bytes};
+use genesis_rules::{Address, B256, Bytes, view};
 use serde_json::{Value, json};
 
 use crate::config::{ChainConfig, Config};
@@ -20,16 +20,54 @@ use crate::rpc::{Rpc, RpcError, RpcResult, bytes, u256};
 /// check asks about: its code hash, and whether it has a genesis itself.
 pub type OwnerSources = BTreeMap<Address, (Option<B256>, bool)>;
 
-pub async fn genesis_on(rpc: &Rpc, registry: Address, safe: Address) -> RpcResult<Option<Recorded>> {
-    let ret = rpc.eth_call(registry, &genesis::genesis_of_call(safe)).await?;
-    genesis::decode_genesis_of(&ret).map_err(|_| RpcError::InvalidResponse)
+/// The registry's answer, told apart from no registry at that address (an
+/// empty answer) and from another version of it (one that does not decode):
+/// both are configuration errors, never "not recorded".
+fn registry_answer<T, E>(ret: &[u8], decode: impl FnOnce(&[u8]) -> Result<T, E>) -> RpcResult<T> {
+    if ret.is_empty() {
+        return Err(RpcError::Contract("no registry contract at this address".into()));
+    }
+    decode(ret).map_err(|_| RpcError::Contract("the registry's answer does not decode: another contract or version".into()))
 }
 
-/// `genesisOf(safe)` on every configured chain in parallel, merged, and the
+/// Registries whose code was found to be this service's version, by chain.
+/// Only a match is kept: the registry cannot change its code, so a match
+/// holds for good, while a mismatch is asked again (a deployment may follow).
+fn verified() -> &'static std::sync::Mutex<std::collections::HashSet<(u64, Address)>> {
+    static VERIFIED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<(u64, Address)>>> = std::sync::OnceLock::new();
+    VERIFIED.get_or_init(Default::default)
+}
+
+/// The registry address on `chain_id` holds this service's version of the
+/// contract. Without this, another version could answer "not recorded" for
+/// every Safe and be believed: its empty answer decodes like this one's.
+async fn ensure_registry(rpc: &Rpc, chain_id: u64, registry: Address) -> RpcResult<()> {
+    if verified().lock().is_ok_and(|v| v.contains(&(chain_id, registry))) {
+        return Ok(());
+    }
+    match rpc.code_hash(registry).await? {
+        Some(h) if h == genesis::REGISTRY_CODE_HASH => {
+            if let Ok(mut v) = verified().lock() {
+                v.insert((chain_id, registry));
+            }
+            Ok(())
+        }
+        Some(_) => Err(RpcError::Contract("the registry address holds another contract or version".into())),
+        None => Err(RpcError::Contract("no registry contract at this address".into())),
+    }
+}
+
+pub async fn genesis_on(rpc: &Rpc, chain_id: u64, registry: Address, safe: Address) -> RpcResult<Option<Recorded>> {
+    ensure_registry(rpc, chain_id, registry).await?;
+    let ret = rpc.eth_call(registry, &genesis::genesis_of_call(safe)).await?;
+    registry_answer(&ret, |r| genesis::decode_genesis_of(r))
+}
+
+/// `genesisOf(safe)` on every registry chain in parallel, merged, and the
 /// served record re-verified against its factory's proxy code.
 pub async fn lookup(config: &Config, safe: Address) -> Lookup {
-    let answers = join_all(config.chains.iter().map(|c| async move {
-        let answer = genesis_on(&Rpc::new(c), config.registry, safe).await.map_err(|e| e.to_string());
+    let answers = join_all(config.registry_chains().map(|c| async move {
+        let answer = genesis_on(&Rpc::new(c), c.chain_id, config.registry, safe).await.map_err(|e| e.to_string());
         ChainAnswer { chain_id: c.chain_id, answer }
     }))
     .await;
@@ -40,6 +78,57 @@ pub async fn lookup(config: &Config, safe: Address) -> Lookup {
         l.verify(safe, code.as_ref());
     }
     l
+}
+
+/// Each registry chain's deployment, for health: whether the registry
+/// address holds this service's version of the contract.
+pub async fn registry_status(config: &Config) -> Vec<Value> {
+    join_all(config.registry_chains().map(|c| async move {
+        let code_hash = Rpc::new(c).code_hash(config.registry).await.map_err(|e| e.to_string());
+        view::registry_status(c.chain_id, code_hash)
+    }))
+    .await
+}
+
+/// Most `eth_call`s a page may take: a page that fails as a whole is read in
+/// halves, so large records cannot stop a reader from listing them.
+const PAGE_MAX_CALLS: usize = 16;
+
+/// One page of `chain`'s registry, newest or oldest first: the registry's
+/// total and each Safe with its record. A call the node rejects (a gas cap
+/// reached by large initializers) is split in two until it fits. Records
+/// written while a split page is read may shift it by as many.
+pub async fn registry_page(
+    chain: &ChainConfig,
+    registry: Address,
+    offset: u64,
+    limit: u64,
+    desc: bool,
+) -> RpcResult<(u64, Vec<(Address, Recorded)>)> {
+    let rpc = Rpc::new(chain);
+    ensure_registry(&rpc, chain.chain_id, registry).await?;
+    let mut todo = std::collections::VecDeque::from([(offset, limit)]);
+    let (mut total, mut out, mut calls) = (None, Vec::new(), 0);
+    while let Some((o, l)) = todo.pop_front() {
+        calls += 1;
+        if calls > PAGE_MAX_CALLS {
+            return Err(RpcError::Rejected("the page is too large to read; ask for fewer records".into()));
+        }
+        match rpc.eth_call(registry, &genesis::genesis_page_call(o, l, desc)).await {
+            Ok(ret) => {
+                let (t, records) = registry_answer(&ret, |r| genesis::decode_genesis_page(r))?;
+                total.get_or_insert(t);
+                out.extend(records);
+            }
+            Err(RpcError::Rejected(_)) if l > 1 => {
+                let half = l / 2;
+                todo.push_front((o + half, l - half));
+                todo.push_front((o, half));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((total.unwrap_or(0), out))
 }
 
 /// The factory's proxy creation code; `None` if it does not answer.

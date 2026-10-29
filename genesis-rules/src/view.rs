@@ -12,8 +12,12 @@ use crate::lookup::Lookup;
 use crate::replay::{ReplayCheck, SafeState, TargetFacts, check, plan};
 use crate::setup::Setup;
 
-/// `GET /api/genesis/{safe}`: status code and body.
+/// `GET /api/genesis/{safe}`: status code and body. 404 only when every
+/// registry answered that it holds nothing; 502 when one could not be read.
 pub fn genesis(safe: Address, l: &Lookup) -> (u16, Value) {
+    if l.is_unknown() {
+        return unreadable(safe, l);
+    }
     let Some((read_from, r)) = &l.record else {
         return (
             404,
@@ -38,6 +42,8 @@ pub fn genesis(safe: Address, l: &Lookup) -> (u16, Value) {
             "recordedAt": r.recorded_at,
             "index": r.index,
             "renamedAt": r.renamed_at,
+            "nameBySafe": r.name_by_safe(safe),
+            "registries": l.records.iter().map(|(chain_id, r)| registry_entry(*chain_id, safe, r)).collect::<Vec<_>>(),
             "setup": setup,
             "setupDefects": setup.as_ref().map(|s| s.defects(safe, version)),
             "deployCall": {"to": r.genesis.factory, "data": r.genesis.deploy_call()},
@@ -45,8 +51,59 @@ pub fn genesis(safe: Address, l: &Lookup) -> (u16, Value) {
     )
 }
 
+/// What one registry holds for a Safe beyond its genesis: each registry
+/// keeps its own name, position and dates.
+fn registry_entry(chain_id: u64, safe: Address, r: &crate::genesis::Recorded) -> Value {
+    json!({"chainId": chain_id, "name": r.genesis.name, "nameBySafe": r.name_by_safe(safe), "renamedAt": r.renamed_at,
+           "index": r.index, "recorder": r.recorder, "recordedAt": r.recorded_at})
+}
+
 pub fn no_genesis() -> (u16, Value) {
     (404, json!({"error": "no genesis recorded for this Safe; POST /api/import first"}))
+}
+
+/// No record found, but a registry could not be read: never "not found".
+pub fn unreadable(safe: Address, l: &Lookup) -> (u16, Value) {
+    (502, json!({"safe": safe, "error": "a registry could not be read; try again", "unreachable": l.unreachable}))
+}
+
+/// `GET /api/registry/{chainId}?offset&limit&order`: one page of a
+/// registry's records, in write order (newest first unless `oldest`).
+pub fn registry_page(chain_id: u64, total: u64, offset: u64, limit: u64, desc: bool, page: &[(Address, crate::genesis::Recorded)]) -> Value {
+    let known = KnownContracts::embedded();
+    let records: Vec<Value> = page
+        .iter()
+        .map(|(safe, r)| {
+            let setup = Setup::decode(&r.genesis.initializer);
+            json!({
+                "safe": safe,
+                "index": r.index,
+                "name": r.genesis.name,
+                "nameBySafe": r.name_by_safe(*safe),
+                "renamedAt": r.renamed_at,
+                "recorder": r.recorder,
+                "recordedAt": r.recorded_at,
+                "singleton": known.at(r.genesis.singleton).iter().find(|c| c.safe_version().is_some()).map(|c| c.name.as_str()),
+                "owners": setup.as_ref().map(|s| &s.owners),
+                "threshold": setup.as_ref().map(|s| s.threshold),
+                "genesis": r.genesis,
+                "proxyCreationCodeHash": r.proxy_creation_code_hash,
+            })
+        })
+        .collect();
+    json!({"chainId": chain_id, "total": total, "offset": offset, "limit": limit,
+           "order": if desc { "newest" } else { "oldest" }, "records": records})
+}
+
+/// One registry deployment's state, as health reports it.
+pub fn registry_status(chain_id: u64, code_hash: Result<Option<alloy::primitives::B256>, String>) -> Value {
+    let status = match &code_hash {
+        Ok(Some(h)) if *h == crate::genesis::REGISTRY_CODE_HASH => "ok",
+        Ok(Some(_)) => "different code: not this service's registry version",
+        Ok(None) => "not deployed",
+        Err(_) => "unreachable",
+    };
+    json!({"chainId": chain_id, "status": status, "error": code_hash.err()})
 }
 
 /// The authority a genesis creates: from the strict plan, or — for a Safe
