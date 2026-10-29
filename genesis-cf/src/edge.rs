@@ -5,7 +5,7 @@
 use futures_util::future::join_all;
 use genesis_rules::cache::{self, Endpoint};
 use genesis_rules::genesis::Genesis;
-use genesis_rules::import::{self, Enqueued, Evidence, Lane, Sponsorship, Task, Usage};
+use genesis_rules::import::{self, Enqueued, Evidence, Sponsorship, Task, Usage};
 use genesis_rules::limits::Class;
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
@@ -385,9 +385,12 @@ impl Edge {
             // devices can read it, whether or not this write is sponsored.
             let _: Value = self.do_post("/mailbox/genesis", &json!({"safe": task.safe, "genesis": task.genesis})).await?;
         }
-        let sponsorship = self.sponsorship(&evidence).await?;
-        if sponsorship != Sponsorship::Sponsor {
-            return Ok(view::import_resolved(&task, self.config.registry, &sponsorship));
+        // No evidence: the caller pays. With evidence, the budget is checked
+        // where the task is queued, after the Safe's active task (which
+        // costs nothing more): a re-import while a write is in flight gets
+        // that task.
+        if evidence.lane().is_none() {
+            return Ok(view::import_resolved(&task, self.config.registry, &import::sponsorship(&evidence, Usage::default())));
         }
         task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
         let queued = match self.do_post::<Enqueued>("/enqueue", &task).await? {
@@ -423,37 +426,15 @@ impl Edge {
         Evidence::assess(deployed, verdict)
     }
 
-    /// The evidence's lane, within its budget and the owner's quota.
-    async fn sponsorship(&self, evidence: &Evidence) -> Result<Sponsorship> {
-        let Some((lane, owner)) = evidence.lane() else {
-            return Ok(import::sponsorship(evidence, Usage::default()));
-        };
-        let lane = match lane {
-            Lane::Deployed => "deployed",
-            Lane::Owner => "owner",
-        };
-        let count = |since: u64, owner: Option<Address>| async move {
-            let owner = owner.map(|o| format!("&owner={o}")).unwrap_or_default();
-            let v = self.do_json(&format!("/sponsored?since={since}&lane={lane}{owner}")).await.ok();
-            v.and_then(|v| v.get("count").and_then(Value::as_u64)).unwrap_or(u64::MAX) as u32
-        };
-        let now = now_ms();
-        let day_ago = now.saturating_sub(86_400_000);
-        let usage = Usage {
-            minute: count(now.saturating_sub(60_000), None).await,
-            day: count(day_ago, None).await,
-            owner_day: if owner.is_some() { count(day_ago, owner).await } else { 0 },
-        };
-        Ok(import::sponsorship(evidence, usage))
-    }
 
     // -- the proposal mailbox -------------------------------------------------------------
 
-    /// A genesis the caller sent, kept only if it derives `safe` on this chain's factory.
-    async fn derives(&self, target: &Target, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
-        let g = g?;
-        let code = registry::factory_proxy_code(target, g.factory).await?;
-        (g.named_right() && g.address(&code) == safe).then_some(g)
+    /// A genesis the caller sent: kept if it is recordable and derives `safe`
+    /// on this chain's factory, refused with the reason otherwise.
+    async fn derives(&self, target: &Target, safe: Address, g: Option<Genesis>) -> std::result::Result<Option<Genesis>, proposal::Refusal> {
+        let Some(g) = g else { return Ok(None) };
+        let code = registry::factory_proxy_code(target, g.factory).await;
+        proposal::supplied_genesis(g, safe, target.chain_id(), code.as_ref()).map(Some)
     }
 
     async fn stored_genesis(&self, safe: Address) -> Option<Genesis> {
@@ -483,7 +464,10 @@ impl Edge {
             return Ok(view::proposal_refused(&proposal::Refusal::Transaction { detail: detail.into() }));
         }
         let mut r = r;
-        r.genesis = self.derives(&target, r.safe, r.genesis.take()).await;
+        r.genesis = match self.derives(&target, r.safe, r.genesis.take()).await {
+            Ok(g) => g,
+            Err(refusal) => return Ok(view::proposal_refused(&refusal)),
+        };
         let members = match self.members(&target, r.safe, r.genesis.clone()).await {
             Ok(m) => m,
             Err(answer) => return Ok(answer),
@@ -682,6 +666,8 @@ pub fn apply_cors(response: &mut Response) -> Result<()> {
     h.set("access-control-allow-methods", "GET, POST, OPTIONS")?;
     h.set("access-control-allow-headers", "content-type")?;
     h.set("access-control-max-age", "86400")?;
+    // A browser may read these: the wait of a 429, and whether it was cached.
+    h.set("access-control-expose-headers", "retry-after, x-cache")?;
     Ok(())
 }
 

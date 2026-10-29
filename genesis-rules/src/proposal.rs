@@ -388,6 +388,39 @@ pub enum Refusal {
     Approval { error: ApprovalError },
     /// The proposal holds as many approvals as it can.
     Full,
+    /// The genesis sent with the proposal cannot be kept: no name, a name
+    /// the registry would not take, or one that does not derive the Safe.
+    Genesis { detail: String },
+}
+
+/// A genesis sent with a proposal, kept only if it can be recorded as it is
+/// and derives `safe` with `proxy_code` (its factory's code on `chain_id`).
+/// Anything else is refused with the reason, never dropped: a dropped genesis
+/// left the Safe unknown and the caller with a 404 and no cause. A name is
+/// required, not defaulted: the kept genesis is what a later import records,
+/// and a default would stand in for the name the user means to give.
+pub fn supplied_genesis(
+    g: crate::genesis::Genesis,
+    safe: Address,
+    chain_id: u64,
+    proxy_code: Option<&Bytes>,
+) -> Result<crate::genesis::Genesis, Refusal> {
+    let refuse = |detail: String| Err(Refusal::Genesis { detail });
+    match &g.name {
+        None => return refuse("the genesis has no name: send the name the Safe is to be recorded with (1 to 64 bytes)".into()),
+        Some(_) if !g.named_right() => {
+            return refuse(format!("the genesis's name must be 1 to {} bytes", crate::genesis::MAX_NAME_LENGTH));
+        }
+        Some(_) => {}
+    }
+    let Some(code) = proxy_code else {
+        return refuse(format!("the proxy code of factory {} on chain {chain_id} could not be read", g.factory));
+    };
+    let derived = g.address(code);
+    if derived != safe {
+        return refuse(format!("the genesis derives {derived} on chain {chain_id}, not this Safe"));
+    }
+    Ok(g)
 }
 
 /// What a submission did.

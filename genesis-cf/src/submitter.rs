@@ -122,21 +122,6 @@ impl DurableObject for SubmitterDo {
                 Some(t) => Response::from_json(&t),
                 None => Ok(Response::from_json(&json!({"error": "unknown task"}))?.with_status(404)),
             },
-            "/sponsored" => {
-                // Tasks created since `since` (every task is a sponsored write)
-                // in one lane, optionally for one owner.
-                let since: i64 = param("since").parse().unwrap_or(0);
-                let lane = if param("lane") == "owner" { "proved_by IS NOT NULL" } else { "proved_by IS NULL" };
-                let mut sql = format!("SELECT count(*) AS n FROM tasks WHERE created >= ?1 AND {lane}");
-                let mut args = vec![SqlStorageValue::from(since)];
-                let owner = param("owner").to_lowercase();
-                if !owner.is_empty() {
-                    sql.push_str(" AND proved_by = ?2");
-                    args.push(SqlStorageValue::from(owner));
-                }
-                let rows: Vec<NumberRow> = self.sql().exec(&sql, args)?.to_array()?;
-                Response::from_json(&json!({"count": rows.first().and_then(|r| r.n).unwrap_or(0)}))
-            }
             "/stats" => {
                 let rows: Vec<CountRow> =
                     self.sql().exec("SELECT status, count(*) AS n FROM tasks GROUP BY status", None)?.to_array()?;

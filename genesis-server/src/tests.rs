@@ -300,14 +300,17 @@ async fn writes_are_limited_per_client() {
     let (rpc, _) = mock_chain(Chain::default()).await;
     let (base, _) = service(910_009, vec![rpc]).await;
     let client = reqwest::Client::new();
+    let limit = genesis_rules::limits::WRITES_PER_MINUTE as usize;
     let mut statuses = Vec::new();
-    for _ in 0..12 {
+    for _ in 0..limit + 2 {
         statuses.push(client.post(format!("{base}/api/import")).body("{").send().await.unwrap().status().as_u16());
     }
-    assert_eq!(&statuses[..10], &[400; 10], "malformed, but counted");
-    assert_eq!(&statuses[10..], &[429, 429]);
+    assert!(statuses[..limit].iter().all(|s| *s == 400), "malformed, but counted");
+    assert_eq!(&statuses[limit..], &[429, 429]);
     let r = client.post(format!("{base}/api/import")).body("{").send().await.unwrap();
     assert!(r.headers().get("retry-after").is_some());
+    let exposed = r.headers().get("access-control-expose-headers").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    assert!(exposed.contains("retry-after"), "a browser can read the wait: {exposed}");
 }
 
 #[test]

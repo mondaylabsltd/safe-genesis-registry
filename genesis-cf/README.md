@@ -199,6 +199,11 @@ re-verifies everything it gets — but it only takes what the chain would.
   owner's on-chain check would: `SafeMessage(safeTxHash)` under the owner's
   domain, `clientDataJSON` rebuilt as the signer contract does,
   user-verified.
+- `genesis` (optional), the Safe's, for one the registry does not hold yet:
+  kept only if it carries a `name` (1 to 64 bytes, the name it will be
+  recorded with) and derives `safe` on this chain's factory. Otherwise `422
+  {"refusal": {"kind": "genesis", "detail"}}` says why; it is never dropped
+  silently.
 - Or by a plain account (an EOA): `{"owner", "signature"}`, its EIP-712
   signature of the SafeTx (`eth_signTypedData_v4`), 65 bytes `r ‖ s ‖ v`.
   `ecrecover(safeTxHash, v, r, s)` must be the owner, as the Safe checks it;
@@ -244,9 +249,13 @@ chain failed to answer is cached. An import drops the Safe's cached lookups.
 
 Per client (the Worker: `cf-connecting-ip`; the container: the connection, or
 `TRUSTED_IP_HEADER` behind a proxy), per minute: 120 reads that reach the
-chains (a cache hit is free) and 10 writes (imports, proposals). Over it:
-`429` with `retry-after`. The sponsor's budget is checked again in the same
-step that queues an import, so concurrent imports cannot spend past it.
+chains (a cache hit is free) and 60 writes (imports, proposals): room for
+an office behind one address. Over it: `429` with `retry-after` (exposed to
+browsers, as is `x-cache`). The sponsor's budget is checked in the step that
+queues an import, after the Safe's active task: a re-import while its write
+is in flight gets that task and costs nothing, and concurrent imports
+cannot spend past the budget. The per-owner quota counts writes made, so
+re-sharing a Safe already recorded never touches it.
 
 ### Chains
 

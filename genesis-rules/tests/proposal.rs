@@ -262,3 +262,28 @@ fn a_high_s_recovers_as_ecrecover_does() {
     sig[64] = if sig[64] == 27 { 28 } else { 27 };
     assert_eq!(genesis_rules::proposal::recover(hash, &sig).unwrap(), eoa_address(&key));
 }
+
+#[test]
+fn a_genesis_sent_with_a_proposal_is_kept_or_refused_with_its_reason() {
+    use genesis_rules::genesis::Genesis;
+    use genesis_rules::proposal::{Refusal, supplied_genesis};
+    use genesis_rules::{Address, Bytes, U256};
+    let code = Bytes::from_static(b"proxy code");
+    let g = Genesis {
+        factory: Address::repeat_byte(0xfa),
+        singleton: Address::repeat_byte(0x51),
+        salt_nonce: U256::from(1),
+        initializer: Bytes::from_static(&[1, 2, 3]),
+        name: Some("Team fund".into()),
+    };
+    let safe = g.address(&code);
+    assert_eq!(supplied_genesis(g.clone(), safe, 100, Some(&code)), Ok(g.clone()));
+    let refused = |r: Result<Genesis, Refusal>| match r {
+        Err(Refusal::Genesis { detail }) => detail,
+        other => panic!("{other:?}"),
+    };
+    assert!(refused(supplied_genesis(Genesis { name: None, ..g.clone() }, safe, 100, Some(&code))).contains("no name"));
+    assert!(refused(supplied_genesis(Genesis { name: Some("x".repeat(65)), ..g.clone() }, safe, 100, Some(&code))).contains("1 to 64 bytes"));
+    assert!(refused(supplied_genesis(g.clone(), Address::repeat_byte(1), 100, Some(&code))).contains("not this Safe"));
+    assert!(refused(supplied_genesis(g, safe, 100, None)).contains("could not be read"));
+}

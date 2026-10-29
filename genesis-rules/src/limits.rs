@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 pub const WINDOW_MS: u64 = 60_000;
 /// Reads that reach the chains, per client per minute.
 pub const READS_PER_MINUTE: u32 = 120;
-/// Imports and proposals, per client per minute.
-pub const WRITES_PER_MINUTE: u32 = 10;
+/// Imports and proposals, per client per minute: room for an office behind
+/// one address; the sponsor's spending has budgets of its own.
+pub const WRITES_PER_MINUTE: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {

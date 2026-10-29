@@ -163,6 +163,8 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
     h.insert("access-control-allow-methods", HeaderValue::from_static("GET, POST, OPTIONS"));
     h.insert("access-control-allow-headers", HeaderValue::from_static("content-type"));
     h.insert("access-control-max-age", HeaderValue::from_static("86400"));
+    // A browser may read these: the wait of a 429, and whether it was cached.
+    h.insert("access-control-expose-headers", HeaderValue::from_static("retry-after, x-cache"));
     response
 }
 
@@ -447,9 +449,11 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
         // devices can read it, whether or not this write is sponsored.
         let _ = app.store.keep_mailbox_genesis(task.safe, &task.genesis);
     }
-    let sponsorship = sponsorship(app, &evidence);
-    if sponsorship != Sponsorship::Sponsor {
-        return view::import_resolved(&task, cfg.registry, &sponsorship);
+    // No evidence: the caller pays. With evidence, the budget is checked
+    // where the task is queued, after the Safe's active task (which costs
+    // nothing more): a re-import while a write is in flight gets that task.
+    if evidence.lane().is_none() {
+        return view::import_resolved(&task, cfg.registry, &import::sponsorship(&evidence, Usage::default()));
     }
     task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
     let queued = match app.store.enqueue_sponsored(&task, crate::now_ms() as i64) {
@@ -486,20 +490,6 @@ async fn evidence(app: &App, task: &Task, c: &ChainConfig, proof: Option<&OwnerP
     Evidence::assess(deployed, verdict)
 }
 
-/// The evidence's lane, within its budget and the owner's quota.
-fn sponsorship(app: &App, evidence: &Evidence) -> Sponsorship {
-    let Some((lane, owner)) = evidence.lane() else {
-        return import::sponsorship(evidence, Usage::default());
-    };
-    let now = crate::now_ms() as i64;
-    let count = |since: i64, owner: Option<Address>| app.store.sponsored_since(since, lane, owner).unwrap_or(u32::MAX);
-    let usage = Usage {
-        minute: count(now - 60_000, None),
-        day: count(now - 86_400_000, None),
-        owner_day: if owner.is_some() { count(now - 86_400_000, owner) } else { 0 },
-    };
-    import::sponsorship(evidence, usage)
-}
 
 // -- the proposal mailbox ---------------------------------------------------------
 
@@ -516,11 +506,12 @@ struct ProposeRequest {
     genesis: Option<Genesis>,
 }
 
-/// A genesis the caller sent, kept only if it derives `safe` on this chain's factory.
-async fn derives(target: &Target, safe: Address, g: Option<Genesis>) -> Option<Genesis> {
-    let g = g?;
-    let code = registry::factory_proxy_code(target, g.factory).await?;
-    (g.named_right() && g.address(&code) == safe).then_some(g)
+/// A genesis the caller sent: kept if it is recordable and derives `safe` on
+/// this chain's factory, refused with the reason otherwise.
+async fn derives(target: &Target, safe: Address, g: Option<Genesis>) -> Result<Option<Genesis>, proposal::Refusal> {
+    let Some(g) = g else { return Ok(None) };
+    let code = registry::factory_proxy_code(target, g.factory).await;
+    proposal::supplied_genesis(g, safe, target.chain_id(), code.as_ref()).map(Some)
 }
 
 async fn members(app: &App, target: &Target, safe: Address, known: Option<Genesis>) -> Result<Members, (u16, Value)> {
@@ -540,7 +531,10 @@ async fn propose(app: &App, r: ProposeRequest) -> (u16, Value) {
     if let Some(detail) = r.safe_tx.refusal() {
         return view::proposal_refused(&proposal::Refusal::Transaction { detail: detail.into() });
     }
-    let genesis = derives(&target, r.safe, r.genesis).await;
+    let genesis = match derives(&target, r.safe, r.genesis).await {
+        Ok(g) => g,
+        Err(refusal) => return view::proposal_refused(&refusal),
+    };
     let members = match members(app, &target, r.safe, genesis.clone()).await {
         Ok(m) => m,
         Err(answer) => return answer,
