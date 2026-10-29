@@ -5,7 +5,8 @@
 use futures_util::future::join_all;
 use genesis_rules::cache::{self, Endpoint};
 use genesis_rules::genesis::Genesis;
-use genesis_rules::import::{self, Evidence, Lane, Sponsorship, Task, Usage};
+use genesis_rules::import::{self, Enqueued, Evidence, Lane, Sponsorship, Task, Usage};
+use genesis_rules::limits::Class;
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
 use genesis_rules::proposal::{self, Approval, Members, Outcome, Proposal, SafeTx};
@@ -43,6 +44,9 @@ impl Edge {
 
     pub async fn route(&self, mut req: Request) -> Result<Response> {
         let url = req.url()?;
+        // Cloudflare sets it, overwriting whatever the client sent.
+        let client = req.headers().get("cf-connecting-ip")?.unwrap_or_default();
+        let client = client.as_str();
         let path = url.path().trim_end_matches('/').to_owned();
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         match (req.method(), segments.as_slice()) {
@@ -57,24 +61,27 @@ impl Edge {
                     Err(e) => return error_response(400, &e),
                 };
                 let key = cache::page_key(self.config.registry, chain.chain_id, page.offset, page.limit, page.desc);
-                self.cached_key(key, || self.registry_page(chain, page)).await
+                self.cached_key(client, key, || self.registry_page(chain, page)).await
             }
             (Method::Get, ["api", "genesis", safe]) => {
                 let safe = parse_address(safe)?;
-                self.cached(Endpoint::Genesis, safe, || self.genesis(safe)).await
+                self.cached(client, Endpoint::Genesis, safe, || self.genesis(safe)).await
             }
             (Method::Get, ["api", "safe", safe, "chains"]) => {
                 let safe = parse_address(safe)?;
-                self.cached(Endpoint::Chains, safe, || self.chains(safe)).await
+                self.cached(client, Endpoint::Chains, safe, || self.chains(safe)).await
             }
             (Method::Get, ["api", "replay", safe]) => {
                 let safe = parse_address(safe)?;
                 let Some(chain) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| self.config.chain(id)) else {
                     return error_response(400, "chainId is required and must be a configured chain");
                 };
-                self.cached(Endpoint::Replay { chain_id: chain.chain_id }, safe, || self.replay(safe, chain)).await
+                self.cached(client, Endpoint::Replay { chain_id: chain.chain_id }, safe, || self.replay(safe, chain)).await
             }
             (Method::Post, ["api", "import"]) => {
+                if let Some(wait) = self.over_limit(client, Class::Write).await {
+                    return too_many(wait);
+                }
                 let declared = req.headers().get("content-length")?.and_then(|l| l.parse::<usize>().ok());
                 if declared.is_some_and(|l| l > MAX_BODY) {
                     return error_response(413, "request body too large");
@@ -93,6 +100,9 @@ impl Edge {
             }
             (Method::Get, ["api", "task", id]) => self.do_get(&format!("/task?id={id}")).await,
             (Method::Post, ["api", "proposals"]) => {
+                if let Some(wait) = self.over_limit(client, Class::Write).await {
+                    return too_many(wait);
+                }
                 let declared = req.headers().get("content-length")?.and_then(|l| l.parse::<usize>().ok());
                 if declared.is_some_and(|l| l > MAX_BODY) {
                     return error_response(413, "request body too large");
@@ -110,6 +120,9 @@ impl Edge {
                 }
             }
             (Method::Get, ["api", "proposals", safe]) => {
+                if let Some(wait) = self.over_limit(client, Class::Read).await {
+                    return too_many(wait);
+                }
                 let safe = parse_address(safe)?;
                 let Some(target) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&self.config, id)) else {
                     return error_response(400, "chainId is required");
@@ -118,6 +131,9 @@ impl Edge {
                 json_response(status, body)
             }
             (Method::Get, ["api", "proposals", safe, hash]) => {
+                if let Some(wait) = self.over_limit(client, Class::Read).await {
+                    return too_many(wait);
+                }
                 let safe = parse_address(safe)?;
                 let Ok(hash) = hash.parse::<genesis_rules::B256>() else { return error_response(400, "not a hash") };
                 let Some(target) = query(&url, "chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&self.config, id)) else {
@@ -132,15 +148,17 @@ impl Edge {
 
     // -- cache ------------------------------------------------------------------
 
-    async fn cached<F, Fut>(&self, endpoint: Endpoint, safe: Address, compute: F) -> Result<Response>
+    async fn cached<F, Fut>(&self, client: &str, endpoint: Endpoint, safe: Address, compute: F) -> Result<Response>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Answer>>,
     {
-        self.cached_key(cache::key(endpoint, self.config.registry, safe), compute).await
+        self.cached_key(client, cache::key(endpoint, self.config.registry, safe), compute).await
     }
 
-    async fn cached_key<F, Fut>(&self, key: String, compute: F) -> Result<Response>
+    /// A cache hit costs nothing and is never limited; a miss reaches the
+    /// chains and counts against the client's reads.
+    async fn cached_key<F, Fut>(&self, client: &str, key: String, compute: F) -> Result<Response>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Answer>>,
@@ -156,6 +174,9 @@ impl Edge {
                 r.headers_mut().set("x-cache", "hit")?;
                 return Ok(r);
             }
+        }
+        if let Some(wait) = self.over_limit(client, Class::Read).await {
+            return too_many(wait);
         }
         let a = compute().await?;
         if let Some(ttl) = a.ttl_secs {
@@ -175,22 +196,41 @@ impl Edge {
         }
     }
 
+    /// Count one request of `class` for `client` in the Durable Object;
+    /// `Some(seconds)` when it is over the limit. If the count cannot be
+    /// made, the request goes through: limits must not become an outage.
+    async fn over_limit(&self, client: &str, class: Class) -> Option<u64> {
+        let client: String = client.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-')).collect();
+        let v = self.do_json(&format!("/limit?client={client}&class={}", class.name())).await.ok()?;
+        v.get("wait").and_then(Value::as_u64)
+    }
+
     // -- health -------------------------------------------------------------------
 
     async fn health(&self) -> Result<Response> {
         let sponsor = self.config.private_key.as_deref().and_then(|k| signer::address(k).ok());
         let queue = self.do_json("/stats").await.unwrap_or(Value::Null);
         let registries = registry::registry_status(&self.config).await;
+        let rpc: Vec<Value> = self
+            .config
+            .chains
+            .iter()
+            .map(|c| json!({"chainId": c.chain_id, "circuit": if Rpc::is_open(c) { "open" } else { "closed" }}))
+            .collect();
+        // This isolate's view: every home-chain endpoint failing.
+        let ok = !Rpc::is_open(self.config.home());
         json_response(
-            200,
+            if ok { 200 } else { 503 },
             json!({
                 "service": "safe-genesis-registry",
+                "ok": ok,
                 "shell": "cloudflare-workers",
                 "version": env!("CARGO_PKG_VERSION"),
                 "registry": self.config.registry,
                 "homeChainId": self.config.home_chain_id,
                 "chains": self.config.chains.iter().map(|c| json!({"chainId": c.chain_id, "name": c.name, "registry": self.config.is_registry_chain(c.chain_id)})).collect::<Vec<_>>(),
                 "registries": registries,
+                "rpc": rpc,
                 "sponsor": sponsor,
                 "alertsConfigured": self.config.telegram_bot_token.is_some() && self.config.telegram_chat_id.is_some(),
                 "queue": queue,
@@ -340,7 +380,13 @@ impl Edge {
             return Ok(view::import_resolved(&task, self.config.registry, &sponsorship));
         }
         task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
-        let queued: Task = self.do_post("/enqueue", &task).await?;
+        let queued = match self.do_post::<Enqueued>("/enqueue", &task).await? {
+            Enqueued::Queued { task } => task,
+            // The budget was spent between the check above and the queue.
+            Enqueued::NotSponsored { sponsorship } => {
+                return Ok(view::import_resolved(&task, self.config.registry, &sponsorship));
+            }
+        };
         self.invalidate(safe).await;
         Ok(view::import_queued(&queued))
     }
@@ -631,4 +677,10 @@ pub fn apply_cors(response: &mut Response) -> Result<()> {
     h.set("access-control-allow-headers", "content-type")?;
     h.set("access-control-max-age", "86400")?;
     Ok(())
+}
+
+pub fn too_many(wait_secs: u64) -> Result<Response> {
+    let mut r = error_response(429, &format!("too many requests; retry in {wait_secs} s"))?;
+    r.headers_mut().set("retry-after", &wait_secs.to_string())?;
+    Ok(r)
 }

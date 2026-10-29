@@ -29,6 +29,11 @@ pub struct Config {
     pub telegram_chat_id: Option<String>,
     pub listen: String,
     pub database: String,
+    /// The header a reverse proxy puts the client's address in
+    /// (`cf-connecting-ip`, `x-forwarded-for`): rate limits count by it. Unset,
+    /// they count by the connection's address. Set it only behind a proxy
+    /// that overwrites the header, or a client can choose its own.
+    pub trusted_ip_header: Option<String>,
 }
 
 impl Config {
@@ -57,6 +62,7 @@ impl Config {
             telegram_chat_id: var("TELEGRAM_CHAT_ID"),
             listen: var("LISTEN_ADDR").unwrap_or_else(|| "0.0.0.0:8080".into()),
             database: var("DATABASE_PATH").unwrap_or_else(|| "/data/genesis.sqlite".into()),
+            trusted_ip_header: var("TRUSTED_IP_HEADER").map(|h| h.to_lowercase()),
         })
     }
 

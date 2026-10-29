@@ -4,7 +4,8 @@
 
 use std::time::Duration;
 
-use genesis_rules::import::{Status, Task};
+use genesis_rules::import::{self, Enqueued, Status, Task, Usage};
+use genesis_rules::limits::{self, Class};
 use genesis_rules::proposal;
 use genesis_rules::sentinel::{self, Facts};
 use serde::Deserialize;
@@ -45,6 +46,12 @@ struct NumberRow {
 }
 
 #[derive(Deserialize)]
+struct WindowRow {
+    start_ms: i64,
+    count: i64,
+}
+
+#[derive(Deserialize)]
 struct AlertRow {
     key: String,
     sent_ms: i64,
@@ -65,15 +72,51 @@ impl DurableObject for SubmitterDo {
                 // The edge enqueues only what the home chain does not hold, so
                 // only an ACTIVE task for the Safe is still current; a done or
                 // failed one is history (the chain is the judge) and is replaced.
-                let stored = match self.by_safe(&task.safe.to_string())? {
-                    Some(existing) if matches!(existing.status, Status::Queued | Status::Submitted) => existing,
-                    _ => {
-                        self.save(&task)?;
-                        task
+                // The budget is checked again here, in the same request as the
+                // insert: concurrent imports cannot spend past it.
+                let answer = match self.by_safe(&task.safe.to_string())? {
+                    Some(existing) if matches!(existing.status, Status::Queued | Status::Submitted) => {
+                        Enqueued::Queued { task: Box::new(existing) }
                     }
+                    _ => match import::sponsorship(&import::evidence_of(&task), self.usage(&task)?) {
+                        import::Sponsorship::Sponsor => {
+                            self.save(&task)?;
+                            Enqueued::Queued { task: Box::new(task) }
+                        }
+                        sponsorship => Enqueued::NotSponsored { sponsorship },
+                    },
                 };
-                self.ensure_alarm().await?;
-                Response::from_json(&stored)
+                if matches!(answer, Enqueued::Queued { .. }) {
+                    self.ensure_alarm().await?;
+                }
+                Response::from_json(&answer)
+            }
+            "/limit" => {
+                // Count one request of a class for a client; `wait` (seconds)
+                // when it is over the limit.
+                let class = if param("class") == "write" { Class::Write } else { Class::Read };
+                let client = param("client");
+                let now = now_ms();
+                let rows: Vec<WindowRow> = self
+                    .sql()
+                    .exec(
+                        "SELECT start_ms, count FROM limits WHERE client = ?1 AND class = ?2",
+                        vec![SqlStorageValue::from(client.clone()), SqlStorageValue::from(class.name())],
+                    )?
+                    .to_array()?;
+                let current = rows.first().map(|r| limits::Window { start_ms: r.start_ms as u64, count: r.count as u32 });
+                let (window, wait) = limits::admit(current, now, class.limit());
+                self.sql().exec(
+                    "INSERT INTO limits (client, class, start_ms, count) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(client, class) DO UPDATE SET start_ms = excluded.start_ms, count = excluded.count",
+                    vec![
+                        SqlStorageValue::from(client),
+                        SqlStorageValue::from(class.name()),
+                        SqlStorageValue::from(window.start_ms as i64),
+                        SqlStorageValue::from(window.count as i64),
+                    ],
+                )?;
+                Response::from_json(&json!({"wait": wait}))
             }
             "/task" => match self.by_id(&param("id"))? {
                 Some(t) => Response::from_json(&t),
@@ -207,6 +250,8 @@ impl SubmitterDo {
         let config = Config::from_env(&self.env)?;
         let active = self.active(1000)?;
         let now = now_ms();
+        // Rate-limit windows that no longer count.
+        self.sql().exec("DELETE FROM limits WHERE start_ms < ?1", vec![SqlStorageValue::from(now as i64 - limits::WINDOW_MS as i64)])?;
         let last_tick = self.meta("lastTickMs")?.unwrap_or(now as i64);
         let newly_failed: Vec<NumberRow> = self
             .sql()
@@ -273,6 +318,28 @@ impl SubmitterDo {
         self.state.storage().sql()
     }
 
+    /// The sponsored writes already made in `task`'s lane (and for its owner).
+    fn usage(&self, task: &Task) -> Result<Usage> {
+        let now = now_ms() as i64;
+        let count = |since: i64, owner: Option<String>| -> Result<u32> {
+            let lane = if task.proved_by.is_some() { "proved_by IS NOT NULL" } else { "proved_by IS NULL" };
+            let mut sql = format!("SELECT count(*) AS n FROM tasks WHERE created >= ?1 AND {lane}");
+            let mut args = vec![SqlStorageValue::from(since)];
+            if let Some(o) = owner {
+                sql.push_str(" AND proved_by = ?2");
+                args.push(SqlStorageValue::from(o));
+            }
+            let rows: Vec<NumberRow> = self.sql().exec(&sql, args)?.to_array()?;
+            Ok(rows.first().and_then(|r| r.n).unwrap_or(0) as u32)
+        };
+        let owner = task.proved_by.map(|o| o.to_string().to_lowercase());
+        Ok(Usage {
+            minute: count(now - 60_000, None)?,
+            day: count(now - 86_400_000, None)?,
+            owner_day: if owner.is_some() { count(now - 86_400_000, owner)? } else { 0 },
+        })
+    }
+
     fn bootstrap(&self) -> Result<()> {
         self.sql().exec(
             "CREATE TABLE IF NOT EXISTS tasks (
@@ -300,7 +367,14 @@ impl SubmitterDo {
                  PRIMARY KEY (chain_id, hash)
              );
              CREATE INDEX IF NOT EXISTS idx_proposals_safe ON proposals (chain_id, safe, nonce);
-             CREATE TABLE IF NOT EXISTS mailbox_geneses (safe TEXT PRIMARY KEY, payload TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS mailbox_geneses (safe TEXT PRIMARY KEY, payload TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS limits (
+                 client   TEXT NOT NULL,
+                 class    TEXT NOT NULL,
+                 start_ms INTEGER NOT NULL,
+                 count    INTEGER NOT NULL,
+                 PRIMARY KEY (client, class)
+             );",
             None,
         )?;
         // Tables made before the owner lane existed lack its column.

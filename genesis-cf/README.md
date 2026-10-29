@@ -232,9 +232,30 @@ found" for 15 s (so an import shows up a moment later), per-chain status and
 replay checks for 30 s, registry pages for 15 s. Nothing assembled while a
 chain failed to answer is cached. An import drops the Safe's cached lookups.
 
+### Limits
+
+Per client (the Worker: `cf-connecting-ip`; the container: the connection, or
+`TRUSTED_IP_HEADER` behind a proxy), per minute: 120 reads that reach the
+chains (a cache hit is free) and 10 writes (imports, proposals). Over it:
+`429` with `retry-after`. The sponsor's budget is checked again in the same
+step that queues an import, so concurrent imports cannot spend past it.
+
+### Chains
+
+Each chain's RPC endpoints are tried in turn: a failed endpoint, or one
+answering with a rate limit or an overloaded node, is skipped for a minute
+and the next is asked (at most three per call, 2 s to connect, 8 s each); a
+revert or another answer of the request's own is final. Every request
+answers within 25 s (`504` otherwise).
+
+A sponsored write that is not mined is replaced at the same nonce with
+higher fees, for as long as it stays pending: a nonce is never abandoned
+while its transaction holds it, so no later write queues behind a forgotten
+one. At the fee cap it waits, and the stuck-queue alert says so.
+
 ### Alerts
 
-Every maintenance tick (cron, every 5 minutes) checks the sponsor balance on
+Every maintenance tick (cron, every minute) checks the sponsor balance on
 the home chain against `MIN_SPONSOR_BALANCE_WEI`, the queue (a task untouched
 for 15 minutes, active tasks with no alarm scheduled) and newly failed tasks.
 A condition is reported once, repeated every 6 hours while it lasts, and
@@ -246,7 +267,10 @@ over Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set;
 
 The import task (`queued` → `submitted` → `done` | `failed`, with `txHash`,
 the stored `broadcast`, `attempts`, `errors`, `error`), and the service's
-configuration, sponsor address and queue counts. Health's `registries` checks
+configuration, sponsor address and queue counts. Health answers `503`
+(`"ok": false`) when the service cannot do its job: every RPC endpoint of
+the home chain failing, or (the container) the submission loop silent for 5
+minutes; `rpc` lists each chain's circuit. Health's `registries` checks
 each registry chain: `ok` when the address holds this service's version of the
 contract (`genesis_rules::genesis::REGISTRY_CODE_HASH`), else `not deployed`,
 `different code…` or `unreachable`. Lookups make the same check once per chain

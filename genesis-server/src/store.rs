@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use genesis_rules::Address;
 use genesis_rules::genesis::Genesis;
-use genesis_rules::import::{Lane, Task};
+use genesis_rules::import::{self, Enqueued, Lane, Sponsorship, Task, Usage};
 use genesis_rules::proposal::{self, Approval, Outcome, Proposal, Refusal, SafeTx};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -70,14 +70,7 @@ impl Store {
     /// cannot both queue. A done or failed task is history and is replaced.
     pub fn enqueue(&self, task: &Task) -> R<Task> {
         self.with(|c| {
-            let existing: Option<String> = c
-                .query_row(
-                    "SELECT payload FROM tasks WHERE safe = ?1 AND status IN ('queued', 'submitted') ORDER BY updated DESC LIMIT 1",
-                    params![task.safe.to_string().to_lowercase()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if let Some(t) = existing.and_then(|p| serde_json::from_str(&p).ok()) {
+            if let Some(t) = active_with(c, task)? {
                 return Ok(t);
             }
             save_with(c, task)?;
@@ -85,16 +78,36 @@ impl Store {
         })
     }
 
+    /// Queue a sponsored `task` if its lane's budget (and its owner's quota)
+    /// still allows, checked in the same locked step as the insert, so
+    /// concurrent imports cannot spend past it. An active task for the Safe
+    /// is returned as it is, as by [`Self::enqueue`].
+    pub fn enqueue_sponsored(&self, task: &Task, now_ms: i64) -> R<Enqueued> {
+        self.with(|c| {
+            if let Some(t) = active_with(c, task)? {
+                return Ok(Enqueued::Queued { task: Box::new(t) });
+            }
+            let evidence = import::evidence_of(task);
+            let (lane, owner) = evidence.lane().expect("a sponsored lane");
+            let usage = Usage {
+                minute: sponsored_since_with(c, now_ms - 60_000, lane, None)?,
+                day: sponsored_since_with(c, now_ms - 86_400_000, lane, None)?,
+                owner_day: if owner.is_some() { sponsored_since_with(c, now_ms - 86_400_000, lane, owner)? } else { 0 },
+            };
+            match import::sponsorship(&evidence, usage) {
+                Sponsorship::Sponsor => {
+                    save_with(c, task)?;
+                    Ok(Enqueued::Queued { task: Box::new(task.clone()) })
+                }
+                sponsorship => Ok(Enqueued::NotSponsored { sponsorship }),
+            }
+        })
+    }
+
     /// Tasks created since `ms` (every task is a sponsored write) in one
     /// lane, optionally for one owner.
     pub fn sponsored_since(&self, ms: i64, lane: Lane, owner: Option<Address>) -> R<u32> {
-        let lane = match lane {
-            Lane::Deployed => "proved_by IS NULL",
-            Lane::Owner => "proved_by IS NOT NULL",
-        };
-        let owner = owner.map(|o| o.to_string().to_lowercase());
-        let sql = format!("SELECT count(*) FROM tasks WHERE created >= ?1 AND {lane} AND (?2 IS NULL OR proved_by = ?2)");
-        self.with(|c| c.query_row(&sql, params![ms, owner], |r| r.get::<_, i64>(0))).map(|n| n as u32)
+        self.with(|c| sponsored_since_with(c, ms, lane, owner))
     }
 
     // -- the proposal mailbox ------------------------------------------------------
@@ -268,4 +281,26 @@ fn proposal_with(c: &Connection, chain_id: u64, hash: &str) -> R<Option<Proposal
         )
         .optional()?;
     Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
+}
+
+/// The Safe's active (queued or submitted) task, if any.
+fn active_with(c: &Connection, task: &Task) -> R<Option<Task>> {
+    let existing: Option<String> = c
+        .query_row(
+            "SELECT payload FROM tasks WHERE safe = ?1 AND status IN ('queued', 'submitted') ORDER BY updated DESC LIMIT 1",
+            params![task.safe.to_string().to_lowercase()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(existing.and_then(|p| serde_json::from_str(&p).ok()))
+}
+
+fn sponsored_since_with(c: &Connection, ms: i64, lane: Lane, owner: Option<Address>) -> R<u32> {
+    let lane = match lane {
+        Lane::Deployed => "proved_by IS NULL",
+        Lane::Owner => "proved_by IS NOT NULL",
+    };
+    let owner = owner.map(|o| o.to_string().to_lowercase());
+    let sql = format!("SELECT count(*) FROM tasks WHERE created >= ?1 AND {lane} AND (?2 IS NULL OR proved_by = ?2)");
+    c.query_row(&sql, params![ms, owner], |r| r.get::<_, i64>(0)).map(|n| n as u32)
 }

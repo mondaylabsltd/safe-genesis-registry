@@ -10,9 +10,14 @@ mod store;
 mod submit;
 mod submitter;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use tokio::sync::Notify;
+use genesis_rules::limits::Window;
+use tokio::sync::{Notify, watch};
 
 pub struct App {
     pub config: config::Config,
@@ -20,6 +25,10 @@ pub struct App {
     pub cache: cache::Cache,
     /// Wakes the submission loop when an import arrives.
     pub wake: Notify,
+    /// When the submission loop last started a pass (ms); health reads it.
+    pub heartbeat_ms: AtomicU64,
+    /// Rate-limit windows, by client and class.
+    pub limits: Mutex<HashMap<(String, &'static str), Window>>,
 }
 
 pub fn now_ms() -> u64 {
@@ -46,16 +55,46 @@ async fn main() {
         }
     };
     let listen = config.listen.clone();
-    let app = Arc::new(App { config, store, cache: cache::Cache::default(), wake: Notify::new() });
-    tokio::spawn(submitter::submission_loop(app.clone()));
-    tokio::spawn(submitter::maintenance_loop(app.clone()));
+    let app = Arc::new(App {
+        config,
+        store,
+        cache: cache::Cache::default(),
+        wake: Notify::new(),
+        heartbeat_ms: AtomicU64::new(now_ms()),
+        limits: Mutex::new(HashMap::new()),
+    });
+    let (stop, stopping) = watch::channel(false);
+    let loops = [
+        tokio::spawn(submitter::submission_loop(app.clone(), stopping.clone())),
+        tokio::spawn(submitter::maintenance_loop(app.clone(), stopping)),
+    ];
 
     let listener = tokio::net::TcpListener::bind(&listen).await.expect("bind");
     tracing::info!(%listen, registry = %app.config.registry, home = app.config.home_chain_id, "listening");
-    axum::serve(listener, http::router(app))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+    axum::serve(listener, http::router(app).into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server");
+    // Requests drained; let the loops finish the step they are in (a step
+    // persists its transaction before sending it), then exit.
+    let _ = stop.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(8), futures_util::future::join_all(loops)).await;
+    tracing::info!("stopped");
+}
+
+/// Ctrl-C, or SIGTERM (`docker stop`).
+async fn shutdown_signal() {
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate => {}
+    }
+    tracing::info!("shutting down");
 }

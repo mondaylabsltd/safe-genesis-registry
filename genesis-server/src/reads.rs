@@ -60,7 +60,7 @@ async fn ensure_registry(rpc: &Rpc, chain_id: u64, registry: Address) -> RpcResu
 pub async fn genesis_on(rpc: &Rpc, chain_id: u64, registry: Address, safe: Address) -> RpcResult<Option<Recorded>> {
     ensure_registry(rpc, chain_id, registry).await?;
     let ret = rpc.eth_call(registry, &genesis::genesis_of_call(safe)).await?;
-    registry_answer(&ret, |r| genesis::decode_genesis_of(r))
+    registry_answer(&ret, genesis::decode_genesis_of)
 }
 
 /// `genesisOf(safe)` on every registry chain in parallel, merged, and the
@@ -84,7 +84,15 @@ pub async fn lookup(config: &Config, safe: Address) -> Lookup {
 /// address holds this service's version of the contract.
 pub async fn registry_status(config: &Config) -> Vec<Value> {
     join_all(config.registry_chains().map(|c| async move {
-        let code_hash = Rpc::new(c).code_hash(config.registry).await.map_err(|e| e.to_string());
+        // Verified once, verified for good: no need to fetch the code again.
+        if verified().lock().is_ok_and(|v| v.contains(&(c.chain_id, config.registry))) {
+            return view::registry_status(c.chain_id, Ok(Some(genesis::REGISTRY_CODE_HASH)));
+        }
+        let rpc = Rpc::new(c);
+        let code_hash = rpc.code_hash(config.registry).await.map_err(|e| e.to_string());
+        if code_hash.as_ref().is_ok_and(|h| *h == Some(genesis::REGISTRY_CODE_HASH)) {
+            let _ = ensure_registry(&rpc, c.chain_id, config.registry).await;
+        }
         view::registry_status(c.chain_id, code_hash)
     }))
     .await
@@ -116,7 +124,7 @@ pub async fn registry_page(
         }
         match rpc.eth_call(registry, &genesis::genesis_page_call(o, l, desc)).await {
             Ok(ret) => {
-                let (t, records) = registry_answer(&ret, |r| genesis::decode_genesis_page(r))?;
+                let (t, records) = registry_answer(&ret, genesis::decode_genesis_page)?;
                 total.get_or_insert(t);
                 out.extend(records);
             }

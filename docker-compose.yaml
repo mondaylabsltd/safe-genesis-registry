@@ -6,7 +6,17 @@ services:
     build: .
     image: safe-genesis-registry:local
     restart: unless-stopped
+    # PID 1 forwards SIGTERM; the service drains requests and finishes the
+    # submission step it is in (its transaction is persisted before sending).
+    init: true
+    stop_grace_period: 20s
     env_file: .env
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     ports:
       - "8080:8080"
     volumes:

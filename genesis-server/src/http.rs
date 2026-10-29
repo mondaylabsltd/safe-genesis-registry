@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes as Body;
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::future::join_all;
 use genesis_rules::cache::{self, Endpoint};
 use genesis_rules::genesis::Genesis;
 use genesis_rules::import::{self, Evidence, Sponsorship, Task, Usage};
+use genesis_rules::limits::{self, Class};
 use genesis_rules::known::KnownContracts;
 use genesis_rules::owner_proof::{self, OwnerProof};
 use genesis_rules::proposal::{self, Approval, Members, SafeTx};
@@ -42,6 +43,8 @@ pub fn router(app: Arc<App>) -> Router {
 async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
+    let client = client_address(&app, &req);
+    let client = client.as_str();
     let declared = req.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<usize>().ok());
     let mut response = if method == Method::OPTIONS {
         StatusCode::NO_CONTENT.into_response()
@@ -56,11 +59,11 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                 (Method::GET, []) => reply(200, json!({"service": "safe-genesis-registry", "docs": "/api/health"})),
                 (Method::GET, ["api", "health"]) => health(&app).await,
                 (Method::GET, ["api", "genesis", safe]) => match safe.parse() {
-                    Ok(safe) => cached(&app, Endpoint::Genesis, safe, || genesis(&app, safe)).await,
+                    Ok(safe) => cached(&app, client, Endpoint::Genesis, safe, || genesis(&app, safe)).await,
                     Err(_) => reply(400, json!({"error": "not an address"})),
                 },
                 (Method::GET, ["api", "safe", safe, "chains"]) => match safe.parse() {
-                    Ok(safe) => cached(&app, Endpoint::Chains, safe, || chains(&app, safe)).await,
+                    Ok(safe) => cached(&app, client, Endpoint::Chains, safe, || chains(&app, safe)).await,
                     Err(_) => reply(400, json!({"error": "not an address"})),
                 },
                 (Method::GET, ["api", "replay", safe]) => {
@@ -69,7 +72,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                     let Some(chain) = chain else {
                         return reply(400, json!({"error": "chainId is required and must be a configured chain"}));
                     };
-                    cached(&app, Endpoint::Replay { chain_id: chain.chain_id }, safe, || replay(&app, safe, chain.clone())).await
+                    cached(&app, client, Endpoint::Replay { chain_id: chain.chain_id }, safe, || replay(&app, safe, chain.clone())).await
                 }
                 (Method::GET, ["api", "registry", chain_id]) => {
                     let Some(chain) = chain_id.parse().ok().filter(|id| app.config.is_registry_chain(*id)).and_then(|id| app.config.chain(id)).cloned()
@@ -81,9 +84,12 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                         Err(e) => return reply(400, json!({"error": e})),
                     };
                     let key = cache::page_key(app.config.registry, chain.chain_id, page.offset, page.limit, page.desc);
-                    cached_key(&app, key, || registry_page(&app, chain.clone(), page)).await
+                    cached_key(&app, client, key, || registry_page(&app, chain.clone(), page)).await
                 }
                 (Method::POST, ["api", "import"]) => {
+                    if let Some(wait) = over_limit(&app, client, Class::Write) {
+                        return too_many(wait);
+                    }
                     if declared.is_some_and(|l| l > MAX_BODY) {
                         return reply(413, json!({"error": "request body too large"}));
                     }
@@ -94,6 +100,9 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                 }
                 (Method::GET, ["api", "task", id]) => task(&app, id),
                 (Method::POST, ["api", "proposals"]) => {
+                    if let Some(wait) = over_limit(&app, client, Class::Write) {
+                        return too_many(wait);
+                    }
                     if declared.is_some_and(|l| l > MAX_BODY) {
                         return reply(413, json!({"error": "request body too large"}));
                     }
@@ -109,6 +118,9 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                     }
                 }
                 (Method::GET, ["api", "proposals", safe]) => {
+                    if let Some(wait) = over_limit(&app, client, Class::Read) {
+                        return too_many(wait);
+                    }
                     let Ok(safe) = safe.parse::<Address>() else { return reply(400, json!({"error": "not an address"})) };
                     let Some(target) = query("chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&app.config, id)) else {
                         return reply(400, json!({"error": "chainId is required"}));
@@ -117,6 +129,9 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
                     reply(status, body)
                 }
                 (Method::GET, ["api", "proposals", safe, hash]) => {
+                    if let Some(wait) = over_limit(&app, client, Class::Read) {
+                        return too_many(wait);
+                    }
                     let Ok(safe) = safe.parse::<Address>() else { return reply(400, json!({"error": "not an address"})) };
                     let Ok(hash) = hash.parse::<genesis_rules::B256>() else { return reply(400, json!({"error": "not a hash"})) };
                     let Some(target) = query("chainId").and_then(|v| v.parse().ok()).and_then(|id| Target::of(&app.config, id)) else {
@@ -146,15 +161,17 @@ fn reply(status: u16, body: Value) -> Response {
 }
 
 /// Serve from cache, or compute `(status, body, ttl)` and cache it.
-async fn cached<F, Fut>(app: &App, endpoint: Endpoint, safe: Address, compute: F) -> Response
+async fn cached<F, Fut>(app: &App, client: &str, endpoint: Endpoint, safe: Address, compute: F) -> Response
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = (u16, Value, Option<u32>)>,
 {
-    cached_key(app, cache::key(endpoint, app.config.registry, safe), compute).await
+    cached_key(app, client, cache::key(endpoint, app.config.registry, safe), compute).await
 }
 
-async fn cached_key<F, Fut>(app: &App, key: String, compute: F) -> Response
+/// A cache hit costs nothing and is never limited; a miss reaches the chains
+/// and counts against the client's reads.
+async fn cached_key<F, Fut>(app: &App, client: &str, key: String, compute: F) -> Response
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = (u16, Value, Option<u32>)>,
@@ -163,6 +180,9 @@ where
         let mut r = reply(status, body);
         r.headers_mut().insert("x-cache", HeaderValue::from_static("hit"));
         return r;
+    }
+    if let Some(wait) = over_limit(app, client, Class::Read) {
+        return too_many(wait);
     }
     let (status, body, ttl) = compute().await;
     if let Some(ttl) = ttl {
@@ -173,24 +193,72 @@ where
     r
 }
 
+/// Who is asking, for rate limits: the trusted proxy header's first address,
+/// else the connection's.
+fn client_address(app: &App, req: &Request) -> String {
+    let from_header = app.config.trusted_ip_header.as_deref().and_then(|h| req.headers().get(h)).and_then(|v| v.to_str().ok());
+    match from_header.and_then(|v| v.split(',').next()).map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => v.to_owned(),
+        None => req.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip().to_string()).unwrap_or_default(),
+    }
+}
+
+/// Count one request of `class` for `client`; `Some(seconds)` when it is over
+/// the limit.
+fn over_limit(app: &App, client: &str, class: Class) -> Option<u64> {
+    let now = crate::now_ms();
+    let mut windows = app.limits.lock().unwrap_or_else(|e| e.into_inner());
+    if windows.len() > 50_000 {
+        windows.retain(|_, w| !limits::expired(w, now));
+    }
+    let key = (client.to_owned(), class.name());
+    let (window, wait) = limits::admit(windows.get(&key).copied(), now, class.limit());
+    windows.insert(key, window);
+    wait
+}
+
+fn too_many(wait_secs: u64) -> Response {
+    let mut r = reply(429, json!({"error": format!("too many requests; retry in {wait_secs} s")}));
+    if let Ok(v) = HeaderValue::from_str(&wait_secs.to_string()) {
+        r.headers_mut().insert(header::RETRY_AFTER, v);
+    }
+    r
+}
+
+/// 503 when the service cannot do its job: the submission loop has not run
+/// a pass for a while (with a sponsor key), or every RPC endpoint of the home
+/// chain is failing. Everything else is reported, not judged.
 async fn health(app: &App) -> Response {
     let c = &app.config;
     let registries = registry::registry_status(c).await;
+    let now = crate::now_ms();
+    let last_pass = app.heartbeat_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let submitter_alive = c.private_key.is_none() || now.saturating_sub(last_pass) < crate::submitter::STALE_AFTER_MS;
+    let rpc: Vec<Value> = c
+        .chains
+        .iter()
+        .map(|x| json!({"chainId": x.chain_id, "circuit": if Rpc::is_open(x) { "open" } else { "closed" }}))
+        .collect();
+    let home_reachable = !Rpc::is_open(c.home());
+    let ok = submitter_alive && home_reachable;
     let mut queue = serde_json::Map::new();
     for (k, v) in app.store.counts().unwrap_or_default() {
         queue.insert(k, json!(v));
     }
     queue.insert("alerts".into(), json!(genesis_rules::sentinel::holding(&app.store.alerts().unwrap_or_default())));
     reply(
-        200,
+        if ok { 200 } else { 503 },
         json!({
             "service": "safe-genesis-registry",
+            "ok": ok,
             "shell": "docker",
             "version": env!("CARGO_PKG_VERSION"),
             "registry": c.registry,
             "homeChainId": c.home_chain_id,
             "chains": c.chains.iter().map(|x| json!({"chainId": x.chain_id, "name": x.name, "registry": c.is_registry_chain(x.chain_id)})).collect::<Vec<_>>(),
             "registries": registries,
+            "rpc": rpc,
+            "submitter": {"alive": submitter_alive, "lastPassMs": c.private_key.as_ref().map(|_| last_pass)},
             "sponsor": c.private_key.as_deref().and_then(|k| signer::address(k).ok()),
             "alertsConfigured": c.telegram_bot_token.is_some() && c.telegram_chat_id.is_some(),
             "queue": queue,
@@ -353,8 +421,10 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
         return view::import_resolved(&task, cfg.registry, &sponsorship);
     }
     task.proved_by = evidence.lane().and_then(|(_, owner)| owner);
-    let queued = match app.store.enqueue(&task) {
-        Ok(t) => t,
+    let queued = match app.store.enqueue_sponsored(&task, crate::now_ms() as i64) {
+        Ok(import::Enqueued::Queued { task }) => task,
+        // The budget was spent between the check above and this step.
+        Ok(import::Enqueued::NotSponsored { sponsorship }) => return view::import_resolved(&task, cfg.registry, &sponsorship),
         Err(e) => return view::error(500, &format!("store: {e}")),
     };
     app.wake.notify_one();

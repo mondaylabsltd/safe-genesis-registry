@@ -7,7 +7,10 @@
 //! stores the whole broadcast BEFORE it is sent: a send that times out after
 //! reaching a node is rebroadcast, never re-signed at a new nonce, and a
 //! transaction that is not mined is replaced at the SAME nonce with higher
-//! fees — one stuck nonce can never wedge the sponsor.
+//! fees — one stuck nonce can never wedge the sponsor. A task never gives up
+//! a nonce its transaction still holds open: every later write of the sponsor
+//! would queue behind it. It keeps replacing (up to the fee cap, where it
+//! waits and the stuck-queue alert speaks) until the nonce is used.
 
 use alloy::primitives::{Address, B256, Bytes};
 use serde::{Deserialize, Serialize};
@@ -16,7 +19,9 @@ use crate::fees::FeePlan;
 use crate::genesis::{Genesis, MAX_INITIALIZER_LENGTH};
 use crate::resolve::{Resolution, Source};
 
-/// Broadcasts (first send and replacements) before a task is given up on.
+/// Broadcasts before a task is given up on when its transaction reverted or
+/// its nonce went to another one. A transaction still pending is never given
+/// up on (see the module docs).
 pub const MAX_ATTEMPTS: u32 = 5;
 /// Consecutive failures before anything was broadcast (estimate, fees, RPC).
 pub const MAX_ERRORS: u32 = 8;
@@ -230,8 +235,10 @@ pub fn next(task: &Task, obs: Observation, now_ms: u64) -> Action {
                     if obs.confirmed_nonce.is_some_and(|n| n > b.nonce) {
                         return if task.attempts >= MAX_ATTEMPTS { give_up("nonce taken") } else { Action::Submit };
                     }
+                    // Still pending: the nonce stays open until it is used, so
+                    // it is replaced, never abandoned, however many attempts.
                     if elapsed >= REPLACE_AFTER_MS {
-                        if task.attempts >= MAX_ATTEMPTS { give_up("not mined") } else { Action::Replace }
+                        Action::Replace
                     } else if elapsed >= REBROADCAST_AFTER_MS {
                         Action::Rebroadcast
                     } else {
@@ -322,6 +329,26 @@ pub enum Sponsorship {
     CallerPays { reason: String },
 }
 
+/// The evidence a queued task was sponsored on: its lane is in the task.
+pub fn evidence_of(task: &Task) -> Evidence {
+    match task.proved_by {
+        Some(owner) => Evidence::Owner(owner),
+        None => Evidence::Deployed,
+    }
+}
+
+/// What queueing a sponsored task came to. The budget is checked again in the
+/// same step that queues (the store's lock, the Durable Object's request), so
+/// concurrent imports cannot spend past it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Enqueued {
+    /// Queued, or the Safe's active task already was.
+    Queued { task: Box<Task> },
+    /// The budget was spent in the meantime.
+    NotSponsored { sponsorship: Sponsorship },
+}
+
 /// Sponsor a Safe that exists on some chain — each one cost its creator a
 /// deployment — or one deployed nowhere yet whose owner proved it asks, each
 /// lane within its own budget and the owner lane within a per-owner quota.
@@ -400,8 +427,10 @@ mod tests {
             Action::MarkFailed { .. }
         ));
         let mut worn = sent(0, 5);
-        worn.attempts = MAX_ATTEMPTS;
-        assert!(matches!(next(&worn, obs(None, Some(5)), REPLACE_AFTER_MS), Action::MarkFailed { .. }));
+        worn.attempts = MAX_ATTEMPTS * 3;
+        assert_eq!(next(&worn, obs(None, Some(5)), REPLACE_AFTER_MS), Action::Replace, "an open nonce is never given up");
+        assert!(matches!(next(&worn, obs(None, Some(6)), 0), Action::MarkFailed { .. }), "a used one is");
+        assert!(matches!(next(&worn, obs(Some(Receipt::Reverted), None), 0), Action::MarkFailed { .. }));
     }
 
     #[test]

@@ -27,6 +27,9 @@
 //! - [`fees`] — EIP-1559 pricing and the spending cap for those writes.
 //! - [`lookup`] — every chain's `genesisOf` answer merged into one lookup.
 //! - [`cache`] — how long each response may be served from cache.
+//! - [`roster`] — which RPC endpoint of a chain to ask next, and which errors
+//!   another endpoint may answer differently.
+//! - [`limits`] — how many requests one client may make.
 //! - [`sentinel`] — operator alerts: a stuck queue, a low sponsor balance,
 //!   failed tasks; when to send, repeat and clear them.
 //! - [`view`] — the response bodies, identical in every shell.
@@ -39,12 +42,14 @@ pub mod fees;
 pub mod genesis;
 pub mod import;
 pub mod known;
+pub mod limits;
 pub mod lookup;
 pub mod owner_proof;
 pub mod passkey;
 pub mod proposal;
 pub mod replay;
 pub mod resolve;
+pub mod roster;
 pub mod sentinel;
 pub mod setup;
 pub mod view;

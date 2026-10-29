@@ -1,7 +1,10 @@
 //! Chain and HTTP access over reqwest. Transport only.
 
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use genesis_rules::roster::{self, Roster};
 
 use genesis_rules::{Address, B256, Bytes, U256};
 use serde_json::{Value, json};
@@ -35,11 +38,34 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(8))
             .user_agent("safe-genesis-registry/0.1")
             .build()
             .expect("http client")
     })
+}
+
+/// One roster per chain (keyed by its endpoints), for the whole process.
+fn rosters() -> &'static Mutex<HashMap<String, Roster>> {
+    static ROSTERS: OnceLock<Mutex<HashMap<String, Roster>>> = OnceLock::new();
+    ROSTERS.get_or_init(Default::default)
+}
+
+fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// A JSON-RPC error object's text, and whether another endpoint may answer
+/// differently.
+fn rpc_error(e: &Value) -> (String, bool) {
+    let code = e.get("code").and_then(Value::as_i64).unwrap_or(0);
+    let message = e.get("message").and_then(Value::as_str).unwrap_or("error");
+    let data = e.get("data").map(Value::to_string).unwrap_or_default();
+    let text = format!("{message} {data}").trim().to_owned();
+    let transient = roster::transient(code, &text);
+    (text, transient)
 }
 
 #[derive(Clone)]
@@ -52,19 +78,39 @@ impl Rpc {
         Self { urls: chain.rpcs.clone() }
     }
 
+    fn with_roster<T>(&self, f: impl FnOnce(&mut Roster) -> T) -> T {
+        let mut all = rosters().lock().unwrap_or_else(|e| e.into_inner());
+        f(all.entry(self.urls.join(" ")).or_insert_with(|| Roster::new(self.urls.clone())))
+    }
+
+    fn mark(&self, url: &str, healthy: bool) {
+        self.with_roster(|r| if healthy { r.mark_healthy(url) } else { r.mark_failed(url, monotonic_ms()) });
+    }
+
+    /// Every endpoint of `chain` failed within the cooldown.
+    pub fn is_open(chain: &ChainConfig) -> bool {
+        Self::new(chain).with_roster(|r| r.is_open(monotonic_ms()))
+    }
+
+    /// One call, on the roster's endpoints in turn: the next one when an
+    /// endpoint fails or answers with a transient error (a rate limit), the
+    /// answer when it is the request's own (a revert).
     pub async fn call(&self, method: &str, params: Value) -> RpcResult<Value> {
         let payload = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        for url in &self.urls {
-            let Ok(r) = client().post(url).json(&payload).send().await else { continue };
-            if !r.status().is_success() {
+        for url in self.with_roster(|r| r.plan(monotonic_ms())) {
+            let Some(body) = post_value(&url, &payload).await else {
+                self.mark(&url, false);
                 continue;
-            }
-            let Ok(body) = r.json::<Value>().await else { continue };
+            };
             if let Some(error) = body.get("error") {
-                let message = error.get("message").and_then(Value::as_str).unwrap_or("error").to_owned();
-                let data = error.get("data").map(Value::to_string).unwrap_or_default();
-                return Err(RpcError::Rejected(format!("{message} {data}").trim().to_owned()));
+                let (text, transient) = rpc_error(error);
+                self.mark(&url, !transient);
+                if transient {
+                    continue;
+                }
+                return Err(RpcError::Rejected(text));
             }
+            self.mark(&url, true);
             return body.get("result").cloned().ok_or(RpcError::InvalidResponse);
         }
         Err(RpcError::Unavailable)
@@ -83,24 +129,39 @@ impl Rpc {
             .map(|(i, (method, params))| json!({"jsonrpc": "2.0", "id": i, "method": method, "params": params}))
             .collect();
         let payload = Value::Array(payload);
-        for url in &self.urls {
-            let Some(Value::Array(answers)) = post_value(url, &payload).await else { continue };
+        let plan = self.with_roster(|r| r.plan(monotonic_ms()));
+        let mut partial = None;
+        for (attempt, url) in plan.iter().enumerate() {
+            let Some(Value::Array(answers)) = post_value(url, &payload).await else {
+                self.mark(url, false);
+                continue;
+            };
             let mut out: Vec<RpcResult<Value>> = vec![Err(RpcError::InvalidResponse); calls.len()];
+            let mut transient = false;
             for a in answers {
                 let Some(i) = a.get("id").and_then(Value::as_u64).map(|i| i as usize).filter(|i| *i < calls.len()) else {
                     continue;
                 };
                 out[i] = match (a.get("result"), a.get("error")) {
-                    (_, Some(e)) => Err(RpcError::Rejected(
-                        e.get("message").and_then(Value::as_str).unwrap_or("error").to_owned(),
-                    )),
+                    (_, Some(e)) => {
+                        let (text, t) = rpc_error(e);
+                        transient |= t;
+                        Err(if t { RpcError::Unavailable } else { RpcError::Rejected(text) })
+                    }
                     (Some(r), None) => Ok(r.clone()),
                     _ => Err(RpcError::InvalidResponse),
                 };
             }
+            // Some calls hit a rate limit: another endpoint may answer them all.
+            if transient && attempt + 1 < plan.len() {
+                self.mark(url, false);
+                partial = Some(out);
+                continue;
+            }
+            self.mark(url, !transient);
             return Ok(out);
         }
-        Err(RpcError::Unavailable)
+        partial.ok_or(RpcError::Unavailable)
     }
 
     pub async fn eth_call(&self, to: Address, data: &Bytes) -> RpcResult<Bytes> {
