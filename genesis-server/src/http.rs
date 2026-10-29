@@ -45,6 +45,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
     let uri = req.uri().clone();
     let client = client_address(&app, &req);
     let client = client.as_str();
+    let started = std::time::Instant::now();
     let declared = req.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<usize>().ok());
     let mut response = if method == Method::OPTIONS {
         StatusCode::NO_CONTENT.into_response()
@@ -55,7 +56,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
             uri.query().and_then(|q| q.split('&').find_map(|p| p.strip_prefix(&format!("{key}=")).map(str::to_owned)))
         };
         let work = async {
-            match (method, segs.as_slice()) {
+            match (method.clone(), segs.as_slice()) {
                 (Method::GET, []) => reply(200, json!({"service": "safe-genesis-registry", "docs": "/api/health"})),
                 (Method::GET, ["api", "health"]) => health(&app).await,
                 (Method::GET, ["api", "genesis", safe]) => match safe.parse() {
@@ -148,6 +149,15 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
             Err(_) => reply(504, json!({"error": "the chains did not answer in time"})),
         }
     };
+    tracing::info!(
+        target: "access",
+        method = %method,
+        path = uri.path(),
+        status = response.status().as_u16(),
+        ms = started.elapsed().as_millis() as u64,
+        cache = response.headers().get("x-cache").and_then(|v| v.to_str().ok()).unwrap_or("-"),
+        client,
+    );
     let h = response.headers_mut();
     h.insert("access-control-allow-origin", HeaderValue::from_static("*"));
     h.insert("access-control-allow-methods", HeaderValue::from_static("GET, POST, OPTIONS"));
@@ -169,12 +179,16 @@ where
     cached_key(app, client, cache::key(endpoint, app.config.registry, safe), compute).await
 }
 
+/// A computed answer: status, body, and how long it may be cached.
+pub type Computed = (u16, Value, Option<u32>);
+
 /// A cache hit costs nothing and is never limited; a miss reaches the chains
-/// and counts against the client's reads.
+/// and counts against the client's reads. Concurrent misses of one key share
+/// one computation. When the chains cannot answer, a stale answer stands in.
 async fn cached_key<F, Fut>(app: &App, client: &str, key: String, compute: F) -> Response
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = (u16, Value, Option<u32>)>,
+    Fut: std::future::Future<Output = Computed>,
 {
     if let Some((status, body)) = app.cache.get(&key) {
         let mut r = reply(status, body);
@@ -184,9 +198,26 @@ where
     if let Some(wait) = over_limit(app, client, Class::Read) {
         return too_many(wait);
     }
-    let (status, body, ttl) = compute().await;
+    let cell = {
+        let mut inflight = app.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        inflight.entry(key.clone()).or_insert_with(|| Arc::new(tokio::sync::OnceCell::new())).clone()
+    };
+    let (status, body, ttl) = cell.get_or_init(compute).await.clone();
+    {
+        let mut inflight = app.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        if inflight.get(&key).is_some_and(|c| Arc::ptr_eq(c, &cell)) {
+            inflight.remove(&key);
+        }
+    }
     if let Some(ttl) = ttl {
         app.cache.put(key, ttl, status, body.clone());
+    } else if let Some((stale_status, body)) = app.cache.get_stale(&key)
+        && cache::serve_stale_instead(status, stale_status)
+    {
+        let status = stale_status;
+        let mut r = reply(status, body);
+        r.headers_mut().insert("x-cache", HeaderValue::from_static("stale"));
+        return r;
     }
     let mut r = reply(status, body);
     r.headers_mut().insert("x-cache", HeaderValue::from_static("miss"));
@@ -623,7 +654,10 @@ async fn resolve_on(
 
 fn task(app: &App, id: &str) -> Response {
     match app.store.by_id(id) {
-        Ok(Some(t)) => reply(200, serde_json::to_value(t).unwrap_or(Value::Null)),
+        Ok(Some(t)) => {
+            let (status, body) = view::task(&t);
+            reply(status, body)
+        }
         Ok(None) => reply(404, json!({"error": "unknown task"})),
         Err(e) => reply(500, json!({"error": format!("store: {e}")})),
     }

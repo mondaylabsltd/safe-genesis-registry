@@ -176,6 +176,30 @@ pub fn import_recorded(safe: Address, l: &Lookup) -> (u16, Value) {
     (200, json!({"safe": safe, "status": "recorded", "recordedOn": l.recorded_on}))
 }
 
+/// `GET /api/task/{id}`: what a client follows of a sponsored import. A
+/// fixed shape, not the stored task (which keeps the signed transaction and
+/// the proxy code for the submitter's own use).
+pub fn task(t: &Task) -> (u16, Value) {
+    (
+        200,
+        json!({
+            "taskId": t.id,
+            "safe": t.safe,
+            "status": t.status,
+            "txHash": t.tx_hash,
+            "nonce": t.broadcast.as_ref().map(|b| b.nonce),
+            "attempts": t.attempts,
+            "error": t.error,
+            "source": t.source,
+            "sourceChainId": t.source_chain_id,
+            "provedBy": t.proved_by,
+            "genesis": t.genesis,
+            "createdMs": t.created_ms,
+            "updatedMs": t.updated_ms,
+        }),
+    )
+}
+
 pub fn import_queued(t: &Task) -> (u16, Value) {
     (202, json!({"safe": t.safe, "taskId": t.id, "status": t.status, "source": t.source, "provedBy": t.proved_by}))
 }

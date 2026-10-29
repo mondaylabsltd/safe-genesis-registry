@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use alloy::primitives::{U256, keccak256};
@@ -38,6 +38,8 @@ struct Chain {
     no_registry: bool,
     /// Every call answers this JSON-RPC error.
     rate_limited: bool,
+    /// From now on, every call fails (an outage).
+    down: AtomicBool,
     /// The registry's records, in write order.
     records: Vec<(Address, ISafeGenesisRegistry::Genesis)>,
     calls: AtomicU32,
@@ -61,7 +63,7 @@ fn record(name: &str, recorder: Address, renamed_at: u64, index: u32) -> ISafeGe
 fn answer(chain: &Chain, call: &Value) -> Value {
     chain.calls.fetch_add(1, Ordering::Relaxed);
     let id = call["id"].clone();
-    if chain.rate_limited {
+    if chain.rate_limited || chain.down.load(Ordering::Relaxed) {
         return json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32005, "message": "rate limit exceeded"}});
     }
     let result = match call["method"].as_str() {
@@ -150,6 +152,7 @@ async fn service_with(chain_id: u64, rpcs: Vec<String>, private_key: Option<Stri
         wake: Notify::new(),
         heartbeat_ms: AtomicU64::new(heartbeat_ms),
         limits: Mutex::new(HashMap::new()),
+        inflight: Mutex::new(HashMap::new()),
     });
     (serve(crate::http::router(app.clone())).await, app)
 }
@@ -159,6 +162,13 @@ async fn get(url: &str) -> (u16, Value, Option<String>) {
     let status = r.status().as_u16();
     let cache = r.headers().get("x-cache").map(|v| v.to_str().unwrap().to_owned());
     (status, r.json().await.unwrap_or(Value::Null), cache)
+}
+
+/// A record whose parameters really derive its Safe, so it verifies.
+fn real_record(name: &str, salt: u32) -> (Address, ISafeGenesisRegistry::Genesis) {
+    let r = record(name, STRANGER, 0, salt);
+    let g = Genesis { factory: r.factory, singleton: r.singleton, salt_nonce: r.saltNonce, initializer: r.initializer.clone(), name: None };
+    (g.address(PROXY_CODE), r)
 }
 
 const SAFE_A: Address = Address::repeat_byte(0xa1);
@@ -329,4 +339,78 @@ fn the_budget_is_checked_in_the_step_that_queues() {
         Enqueued::Queued { task: t } => assert_eq!(t.id, "t0"),
         other => panic!("{other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_stale_answer_stands_in_while_the_chain_is_down() {
+    let (safe, r) = real_record("Kept", 7);
+    let (rpc, chain) = mock_chain(Chain { records: vec![(safe, r)], ..Default::default() }).await;
+    let (base, app) = service(910_010, vec![rpc]).await;
+    let url = format!("{base}/api/genesis/{safe}");
+    let (status, body, _) = get(&url).await;
+    assert_eq!(status, 200);
+    // Expire it (still within the stale window), then take the chain down.
+    let key = genesis_rules::cache::key(genesis_rules::cache::Endpoint::Genesis, REGISTRY, safe);
+    app.cache.put(key, 0, status, body.clone());
+    chain.down.store(true, Ordering::Relaxed);
+    let (status, stale, cache) = get(&url).await;
+    assert_eq!((status, cache.as_deref()), (200, Some("stale")));
+    assert_eq!(stale, body);
+    // A Safe never seen before has no stale answer: the failure shows.
+    let (status, _, _) = get(&format!("{base}/api/genesis/{SAFE_A}")).await;
+    assert_eq!(status, 502);
+}
+
+#[tokio::test]
+async fn concurrent_misses_share_one_computation() {
+    let (safe, r) = real_record("Popular", 8);
+    let (rpc, chain) = mock_chain(Chain { records: vec![(safe, r)], ..Default::default() }).await;
+    let (base, _) = service(910_011, vec![rpc]).await;
+    get(&format!("{base}/api/genesis/{STRANGER}")).await; // verifies the registry once
+    let before = chain.calls.load(Ordering::Relaxed);
+    let url = format!("{base}/api/genesis/{safe}");
+    let answers = futures_util::future::join_all((0..16).map(|_| get(&url))).await;
+    assert!(answers.iter().all(|(s, ..)| *s == 200));
+    let calls = chain.calls.load(Ordering::Relaxed) - before;
+    assert!(calls <= 4, "16 concurrent reads made {calls} chain calls; one lookup makes 2");
+}
+
+#[test]
+fn finished_tasks_are_pruned_and_active_ones_kept() {
+    use genesis_rules::import::Status;
+    let store = crate::store::Store::open(":memory:").unwrap();
+    let make = |i: u8, status: Status, updated: u64| {
+        let g = Genesis { factory: FACTORY, singleton: Address::repeat_byte(0x51), salt_nonce: U256::from(i), initializer: Bytes::from_static(&[1]), name: Some("x".into()) };
+        let code = Bytes::from_static(PROXY_CODE);
+        let mut t = import::admit(format!("p{i}"), g.address(&code), 1, Resolution::Found { genesis: g, source: Source::Supplied }, code, updated).unwrap();
+        t.status = status;
+        t.updated_ms = updated;
+        store.save(&t).unwrap();
+    };
+    let now = 100 * 86_400_000u64;
+    make(1, Status::Done, 1);
+    make(2, Status::Failed, now - 1_000);
+    make(3, Status::Submitted, 1);
+    let (tasks, _) = store.prune(now as i64).unwrap();
+    assert_eq!(tasks, 1, "only the old finished one");
+    assert!(store.by_id("p1").unwrap().is_none());
+    assert!(store.by_id("p2").unwrap().is_some(), "finished recently");
+    assert!(store.by_id("p3").unwrap().is_some(), "never an active one");
+}
+
+#[test]
+fn a_database_from_a_newer_build_is_refused() {
+    let path = std::env::temp_dir().join(format!("sgr-schema-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA user_version = 99").unwrap();
+    }
+    assert!(crate::store::Store::open(path.to_str().unwrap()).is_err());
+    let _ = std::fs::remove_file(&path);
+    let fresh = std::env::temp_dir().join(format!("sgr-schema-new-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&fresh);
+    crate::store::Store::open(fresh.to_str().unwrap()).unwrap();
+    crate::store::Store::open(fresh.to_str().unwrap()).expect("its own schema reopens");
+    let _ = std::fs::remove_file(&fresh);
 }

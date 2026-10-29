@@ -22,6 +22,18 @@ pub const FOUND_TTL_SECS: u32 = 300;
 pub const NOT_FOUND_TTL_SECS: u32 = 15;
 pub const LIVE_TTL_SECS: u32 = 30;
 pub const PAGE_TTL_SECS: u32 = 15;
+/// How long past its TTL a cached answer may still be served, marked
+/// `x-cache: stale`, when the chains cannot answer now (a 5xx). An old answer
+/// beats none; a fresh one always replaces it.
+pub const STALE_SECS: u32 = 3_600;
+
+/// Whether a stale answer may stand in for a fresh attempt: the attempt
+/// failed (the chains could not be read, or not in time: 5xx), and the stale
+/// answer was a success. A stale "not found" never stands in: during an
+/// outage it would say "no genesis" where the truth is "could not read".
+pub fn serve_stale_instead(fresh_status: u16, stale_status: u16) -> bool {
+    fresh_status >= 500 && stale_status == 200
+}
 
 /// What a response was built from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +90,14 @@ pub fn invalidated_by_import(registry: Address, safe: Address, chain_ids: &[u64]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_answers_stand_in_only_for_failures_and_only_when_they_succeeded() {
+        assert!(serve_stale_instead(502, 200));
+        assert!(serve_stale_instead(504, 200));
+        assert!(!serve_stale_instead(404, 200), "a fresh answer is an answer");
+        assert!(!serve_stale_instead(502, 404), "a stale not-found would mislead");
+    }
 
     #[test]
     fn policy() {

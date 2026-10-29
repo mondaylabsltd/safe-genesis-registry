@@ -23,6 +23,9 @@ use crate::resolve::{Resolution, Source};
 /// its nonce went to another one. A transaction still pending is never given
 /// up on (see the module docs).
 pub const MAX_ATTEMPTS: u32 = 5;
+/// How long a finished (done or failed) task stays readable before the
+/// store drops it. The budget counts only the last day.
+pub const TASK_KEEP_MS: u64 = 30 * 86_400_000;
 /// Consecutive failures before anything was broadcast (estimate, fees, RPC).
 pub const MAX_ERRORS: u32 = 8;
 /// Send the same signed transaction again after this long without a receipt.

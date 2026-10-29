@@ -12,15 +12,30 @@ const MAX_ENTRIES: usize = 10_000;
 /// 8 KiB; a /chains body for a dozen chains a few times that).
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
+struct Entry {
+    fresh_until: Instant,
+    stale_until: Instant,
+    status: u16,
+    body: Value,
+}
+
 #[derive(Default)]
 pub struct Cache {
-    map: Mutex<HashMap<String, (Instant, u16, Value)>>,
+    map: Mutex<HashMap<String, Entry>>,
 }
 
 impl Cache {
+    /// A fresh answer.
     pub fn get(&self, key: &str) -> Option<(u16, Value)> {
         let map = self.map.lock().expect("cache lock");
-        map.get(key).filter(|(until, ..)| *until > Instant::now()).map(|(_, s, b)| (*s, b.clone()))
+        map.get(key).filter(|e| e.fresh_until > Instant::now()).map(|e| (e.status, e.body.clone()))
+    }
+
+    /// An answer past its TTL but within [`genesis_rules::cache::STALE_SECS`],
+    /// for when the chains cannot answer now.
+    pub fn get_stale(&self, key: &str) -> Option<(u16, Value)> {
+        let map = self.map.lock().expect("cache lock");
+        map.get(key).filter(|e| e.stale_until > Instant::now()).map(|e| (e.status, e.body.clone()))
     }
 
     pub fn put(&self, key: String, ttl_secs: u32, status: u16, body: Value) {
@@ -28,14 +43,20 @@ impl Cache {
             return;
         }
         let mut map = self.map.lock().expect("cache lock");
+        let now = Instant::now();
         if map.len() >= MAX_ENTRIES {
-            let now = Instant::now();
-            map.retain(|_, (until, ..)| *until > now);
+            // Past even their stale window first, then past their TTL.
+            map.retain(|_, e| e.stale_until > now);
+            if map.len() >= MAX_ENTRIES {
+                map.retain(|_, e| e.fresh_until > now);
+            }
             if map.len() >= MAX_ENTRIES {
                 map.clear();
             }
         }
-        map.insert(key, (Instant::now() + Duration::from_secs(ttl_secs.into()), status, body));
+        let fresh_until = now + Duration::from_secs(ttl_secs.into());
+        let stale_until = fresh_until + Duration::from_secs(genesis_rules::cache::STALE_SECS.into());
+        map.insert(key, Entry { fresh_until, stale_until, status, body });
     }
 
     pub fn delete(&self, key: &str) {

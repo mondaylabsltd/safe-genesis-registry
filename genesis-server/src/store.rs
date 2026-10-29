@@ -16,9 +16,20 @@ pub struct Store {
 
 type R<T> = rusqlite::Result<T>;
 
+/// The schema this build writes (`PRAGMA user_version`). 1: tasks with the
+/// owner lane, alerts, meta, proposals, mailbox geneses. A database from a
+/// newer build is refused rather than misread.
+const SCHEMA_VERSION: i64 = 1;
+
 impl Store {
     pub fn open(path: &str) -> R<Self> {
         let conn = Connection::open(path)?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "the database has schema {version}, newer than this build's {SCHEMA_VERSION}"
+            )));
+        }
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              CREATE TABLE IF NOT EXISTS tasks (
@@ -54,6 +65,7 @@ impl Store {
         if has == 0 {
             conn.execute("ALTER TABLE tasks ADD COLUMN proved_by TEXT", [])?;
         }
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -101,6 +113,20 @@ impl Store {
                 }
                 sponsorship => Ok(Enqueued::NotSponsored { sponsorship }),
             }
+        })
+    }
+
+    /// Drop what no reader is served any more: finished tasks after
+    /// [`import::TASK_KEEP_MS`], proposals unchanged for [`proposal::KEEP_MS`].
+    /// Returns how many tasks and proposals went.
+    pub fn prune(&self, now_ms: i64) -> R<(usize, usize)> {
+        self.with(|c| {
+            let tasks = c.execute(
+                "DELETE FROM tasks WHERE status IN ('done', 'failed') AND updated < ?1",
+                params![now_ms - import::TASK_KEEP_MS as i64],
+            )?;
+            let proposals = c.execute("DELETE FROM proposals WHERE updated < ?1", params![now_ms - proposal::KEEP_MS as i64])?;
+            Ok((tasks, proposals))
         })
     }
 
@@ -187,8 +213,16 @@ impl Store {
         self.with(|c| {
             let mut st = c.prepare(sql)?;
             let rows = st.query_map(args, |r| r.get::<_, String>(0))?;
-            // An unreadable payload reads as missing rather than jamming the queue.
-            Ok(rows.filter_map(|r| r.ok()).filter_map(|p| serde_json::from_str(&p).ok()).collect())
+            // An unreadable payload reads as missing rather than jamming the
+            // queue, and is said in the log.
+            Ok(rows
+                .filter_map(|r| r.ok())
+                .filter_map(|p| {
+                    serde_json::from_str(&p)
+                        .map_err(|e| tracing::warn!(error = %e, "a stored task does not parse; skipped"))
+                        .ok()
+                })
+                .collect())
         })
     }
 

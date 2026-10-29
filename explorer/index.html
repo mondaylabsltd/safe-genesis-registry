@@ -342,6 +342,32 @@ function renderPager() {
 }
 
 // -- loading ----------------------------------------------------------------------
+
+// One page of records. A page the node refuses whole (large initializers can
+// exceed its eth_call gas cap) is read in halves, at most 16 calls, as the
+// service does.
+async function readPage(offset, limit, desc) {
+  const todo = [[offset, limit]];
+  const safes = [], records = [];
+  let total = null, calls = 0, last;
+  while (todo.length) {
+    const [o, l] = todo.shift();
+    if (++calls > 16) throw last || new Error("the page is too large to read; choose fewer per page");
+    try {
+      const [t, s, r] = await client.readContract({
+        address: CONFIG.registry, abi: REGISTRY_ABI, functionName: "genesisPage", args: [BigInt(o), BigInt(l), desc],
+      });
+      if (total === null) total = t;
+      safes.push(...s); records.push(...r);
+    } catch (err) {
+      if (l <= 1) throw err;
+      last = err;
+      const half = Math.floor(l / 2);
+      todo.unshift([o, half], [o + half, l - half]);
+    }
+  }
+  return [total ?? 0n, safes, records];
+}
 let generation = 0;
 async function load() {
   const mine = ++generation;
@@ -360,10 +386,7 @@ async function load() {
       const version = await client.readContract({ address: CONFIG.registry, abi: REGISTRY_ABI, functionName: "VERSION" });
       $("meta").textContent = `registry ${CONFIG.registry} · v${version} · ${CONFIG.rpc}`;
     }
-    const [total, safes, records] = await client.readContract({
-      address: CONFIG.registry, abi: REGISTRY_ABI, functionName: "genesisPage",
-      args: [BigInt(state.page * state.size), BigInt(state.size), state.order === "desc"],
-    });
+    const [total, safes, records] = await readPage(state.page * state.size, state.size, state.order === "desc");
     if (mine !== generation) return;
     state.total = Number(total);
     $("total").textContent = state.total.toLocaleString();

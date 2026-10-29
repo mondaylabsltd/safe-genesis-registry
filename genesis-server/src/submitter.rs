@@ -99,5 +99,10 @@ async fn maintain(app: &App) -> Result<(), String> {
         }
     }
     store.replace_alerts(&state).map_err(|e| e.to_string())?;
+    match store.prune(now as i64) {
+        Ok((0, 0)) => {}
+        Ok((tasks, proposals)) => tracing::info!(tasks, proposals, "pruned"),
+        Err(e) => tracing::warn!(error = %e, "prune failed"),
+    }
     store.set_meta("lastTickMs", now as i64).map_err(|e| e.to_string())
 }

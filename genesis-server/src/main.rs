@@ -31,6 +31,9 @@ pub struct App {
     pub heartbeat_ms: AtomicU64,
     /// Rate-limit windows, by client and class.
     pub limits: Mutex<HashMap<(String, &'static str), Window>>,
+    /// Answers being computed, by cache key: concurrent misses of one key
+    /// wait for the same computation instead of each asking the chains.
+    pub inflight: Mutex<HashMap<String, Arc<tokio::sync::OnceCell<http::Computed>>>>,
 }
 
 pub fn now_ms() -> u64 {
@@ -39,9 +42,13 @@ pub fn now_ms() -> u64 {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    // LOG_FORMAT=json: one JSON object per line, for log collectors.
+    if std::env::var("LOG_FORMAT").is_ok_and(|f| f == "json") {
+        tracing_subscriber::fmt().json().with_env_filter(filter).init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
     let config = match config::Config::from_env() {
         Ok(c) => c,
         Err(e) => {
@@ -64,6 +71,7 @@ async fn main() {
         wake: Notify::new(),
         heartbeat_ms: AtomicU64::new(now_ms()),
         limits: Mutex::new(HashMap::new()),
+        inflight: Mutex::new(HashMap::new()),
     });
     let (stop, stopping) = watch::channel(false);
     let loops = [

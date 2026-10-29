@@ -250,8 +250,14 @@ impl SubmitterDo {
         let config = Config::from_env(&self.env)?;
         let active = self.active(1000)?;
         let now = now_ms();
-        // Rate-limit windows that no longer count.
+        // What no reader is served any more: spent rate-limit windows,
+        // finished tasks past their keep, proposals unchanged for as long.
         self.sql().exec("DELETE FROM limits WHERE start_ms < ?1", vec![SqlStorageValue::from(now as i64 - limits::WINDOW_MS as i64)])?;
+        self.sql().exec(
+            "DELETE FROM tasks WHERE status IN ('done', 'failed') AND updated < ?1",
+            vec![SqlStorageValue::from(now as i64 - import::TASK_KEEP_MS as i64)],
+        )?;
+        self.sql().exec("DELETE FROM proposals WHERE updated < ?1", vec![SqlStorageValue::from(now as i64 - proposal::KEEP_MS as i64)])?;
         let last_tick = self.meta("lastTickMs")?.unwrap_or(now as i64);
         let newly_failed: Vec<NumberRow> = self
             .sql()

@@ -98,7 +98,17 @@ impl Edge {
                     Err(e) => error_response(400, &format!("invalid request: {e}")),
                 }
             }
-            (Method::Get, ["api", "task", id]) => self.do_get(&format!("/task?id={id}")).await,
+            (Method::Get, ["api", "task", id]) => {
+                let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                let mut r = self.submitter()?.fetch_with_str(&format!("https://do/task?id={id}")).await?;
+                match r.status_code() {
+                    200 => {
+                        let (status, body) = view::task(&r.json::<Task>().await?);
+                        json_response(status, body)
+                    }
+                    status => json_response(status, r.json().await?),
+                }
+            }
             (Method::Post, ["api", "proposals"]) => {
                 if let Some(wait) = self.over_limit(client, Class::Write).await {
                     return too_many(wait);
@@ -163,26 +173,25 @@ impl Edge {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Answer>>,
     {
-        if let Some(mut hit) = Cache::default().get(key.as_str(), false).await? {
-            #[derive(Deserialize)]
-            struct Envelope {
-                status: u16,
-                body: Value,
-            }
-            if let Ok(e) = serde_json::from_str::<Envelope>(&hit.text().await?) {
-                let mut r = json_response(e.status, e.body)?;
-                r.headers_mut().set("x-cache", "hit")?;
-                return Ok(r);
-            }
+        if let Some((status, body)) = cache_read(&key).await? {
+            let mut r = json_response(status, body)?;
+            r.headers_mut().set("x-cache", "hit")?;
+            return Ok(r);
         }
         if let Some(wait) = self.over_limit(client, Class::Read).await {
             return too_many(wait);
         }
         let a = compute().await?;
         if let Some(ttl) = a.ttl_secs {
-            let mut envelope = Response::ok(json!({"status": a.status, "body": a.body}).to_string())?;
-            envelope.headers_mut().set("cache-control", &format!("max-age={ttl}"))?;
-            Cache::default().put(key.as_str(), envelope).await?;
+            cache_write(&key, ttl, a.status, &a.body).await?;
+            // The copy a failure may fall back on, kept for the stale window too.
+            cache_write(&stale_key(&key), ttl + cache::STALE_SECS, a.status, &a.body).await?;
+        } else if let Some((stale_status, body)) = cache_read(&stale_key(&key)).await?
+            && cache::serve_stale_instead(a.status, stale_status)
+        {
+            let mut r = json_response(stale_status, body)?;
+            r.headers_mut().set("x-cache", "stale")?;
+            return Ok(r);
         }
         let mut r = json_response(a.status, a.body)?;
         r.headers_mut().set("x-cache", "miss")?;
@@ -193,6 +202,7 @@ impl Edge {
         let chains: Vec<u64> = self.config.chains.iter().map(|c| c.chain_id).collect();
         for key in cache::invalidated_by_import(self.config.registry, safe, &chains) {
             let _ = Cache::default().delete(key.as_str(), false).await;
+            let _ = Cache::default().delete(stale_key(&key).as_str(), false).await;
         }
     }
 
@@ -543,12 +553,6 @@ impl Edge {
         r.json().await
     }
 
-    async fn do_get(&self, path: &str) -> Result<Response> {
-        let mut r = self.submitter()?.fetch_with_str(&format!("https://do{path}")).await?;
-        let status = r.status_code();
-        json_response(status, r.json().await?)
-    }
-
     async fn do_post<T: serde::de::DeserializeOwned>(&self, path: &str, body: &impl serde::Serialize) -> Result<T> {
         let headers = Headers::new();
         headers.set("content-type", "application/json")?;
@@ -677,6 +681,28 @@ pub fn apply_cors(response: &mut Response) -> Result<()> {
     h.set("access-control-allow-headers", "content-type")?;
     h.set("access-control-max-age", "86400")?;
     Ok(())
+}
+
+/// A cached answer under `key`, if the Cache API holds one.
+async fn cache_read(key: &str) -> Result<Option<(u16, Value)>> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        status: u16,
+        body: Value,
+    }
+    let Some(mut hit) = Cache::default().get(key, false).await? else { return Ok(None) };
+    Ok(serde_json::from_str::<Envelope>(&hit.text().await?).ok().map(|e| (e.status, e.body)))
+}
+
+async fn cache_write(key: &str, ttl_secs: u32, status: u16, body: &Value) -> Result<()> {
+    let mut envelope = Response::ok(json!({"status": status, "body": body}).to_string())?;
+    envelope.headers_mut().set("cache-control", &format!("max-age={ttl_secs}"))?;
+    Cache::default().put(key, envelope).await
+}
+
+/// Where the stale copy of a cached answer lives.
+fn stale_key(key: &str) -> String {
+    format!("{key}/stale")
 }
 
 pub fn too_many(wait_secs: u64) -> Result<Response> {

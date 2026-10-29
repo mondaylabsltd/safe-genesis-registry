@@ -229,7 +229,14 @@ a registry holds the record.
 Responses carry `x-cache: hit | miss`. A found genesis is cached for 5 minutes
 (the genesis never changes, its name can: a rename shows within that), "not
 found" for 15 s (so an import shows up a moment later), per-chain status and
-replay checks for 30 s, registry pages for 15 s. Nothing assembled while a
+replay checks for 30 s, registry pages for 15 s. When the chains cannot
+answer (a 5xx), an answer that succeeded within the last hour stands in,
+marked `x-cache: stale`; a stale "not found" never does. The container also
+lets concurrent misses of one key share a single computation.
+
+Finished tasks are dropped 30 days after they end, proposals 30 days after
+their last change (the maintenance pass). The container logs one line per
+request (`target: access`); `LOG_FORMAT=json` makes every line JSON. Nothing assembled while a
 chain failed to answer is cached. An import drops the Safe's cached lookups.
 
 ### Limits
@@ -265,8 +272,9 @@ over Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set;
 
 ### `GET /api/task/{id}`, `GET /api/health`
 
-The import task (`queued` → `submitted` → `done` | `failed`, with `txHash`,
-the stored `broadcast`, `attempts`, `errors`, `error`), and the service's
+The import task: `{taskId, safe, status, txHash, nonce, attempts, error,
+source, sourceChainId, provedBy, genesis, createdMs, updatedMs}`, `status`
+going `queued` → `submitted` → `done` | `failed`; and the service's
 configuration, sponsor address and queue counts. Health answers `503`
 (`"ok": false`) when the service cannot do its job: every RPC endpoint of
 the home chain failing, or (the container) the submission loop silent for 5
