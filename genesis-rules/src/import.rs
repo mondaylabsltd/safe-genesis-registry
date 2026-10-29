@@ -482,6 +482,10 @@ mod tests {
         assert_eq!(task.genesis.name, Some(crate::genesis::default_name(safe)));
         let named = found(unnamed).named(Some("Given".into()));
         assert_eq!(admit("t".into(), safe, 100, named, code.clone(), 0).unwrap().genesis.name.as_deref(), Some("Given"));
+        // Copied from another registry: that registry's name is not carried
+        // over; the caller's (or the default) is written.
+        let copied = Resolution::from_registry(genesis(), 1).named(Some("Mine".into()));
+        assert!(matches!(&copied, Resolution::Found { genesis: g, source: Source::Registry { chain_id: 1 } } if g.name.as_deref() == Some("Mine")));
         // A name the genesis has already stays.
         let kept = found(genesis()).named(Some("Other".into()));
         assert!(matches!(kept, Resolution::Found { genesis: g, .. } if g.name.as_deref() == Some("Team fund")));

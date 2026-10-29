@@ -423,7 +423,7 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
         let Some(code) = registry::proxy_code(&rpc, r.genesis.factory).await else {
             return view::error(502, "factory did not answer proxyCreationCode()");
         };
-        (Resolution::Found { genesis: r.genesis, source: Source::Registry { chain_id } }, code, chain_id)
+        (Resolution::from_registry(r.genesis, chain_id), code, chain_id)
     } else if let Some(genesis) = req.genesis {
         let Some(code) = registry::proxy_code(&Rpc::new(c), genesis.factory).await else {
             return view::error(502, "factory did not answer proxyCreationCode()");

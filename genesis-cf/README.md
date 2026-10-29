@@ -47,9 +47,14 @@ The Safe's genesis from whichever registries hold it (home chain preferred).
 `verified` re-derives the address from the record and the factory's proxy
 code on the chain it was read from. The genesis is the same in every
 registry; the name, `index` and dates are each registry's own, listed under
-`registries`. `nameBySafe` says whether a name is the Safe's own (it renamed
-itself, or wrote the record); otherwise the first writer chose it and a
-wallet should say so.
+`registries`. `nameBySafe` says whether the name was chosen by the account at
+the Safe's address on the registry's chain (it renamed itself, or wrote the
+record); otherwise the first writer chose it and a wallet should say so.
+That account starts with the Safe's original owners on Gnosis: before
+showing a `nameBySafe` name as the user's, a wallet checks that the Safe's
+owners and threshold there match the chain the user uses (see the README's
+*Names*). A Safe imported from another registry's record is written with the
+caller's name (or the default), never the other registry's.
 
 ```json
 {

@@ -28,6 +28,14 @@ pub enum Resolution {
 }
 
 impl Resolution {
+    /// A genesis copied from the registry on another chain. Its name is not
+    /// carried over: there it may be a squatter's (whoever wrote first), and
+    /// a name that is not UTF-8 reads back longer than the registry takes.
+    /// The caller's name, or the default, is written instead.
+    pub fn from_registry(genesis: Genesis, chain_id: u64) -> Self {
+        Resolution::Found { genesis: Genesis { name: None, ..genesis }, source: Source::Registry { chain_id } }
+    }
+
     /// Give a found genesis that has no name this one. A name it has already
     /// (from a record on another chain, or from the caller's genesis) stays.
     pub fn named(self, name: Option<String>) -> Self {

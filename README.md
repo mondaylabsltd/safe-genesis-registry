@@ -70,6 +70,27 @@ should say so. A rename changes nothing but the name. It needs the Safe
 deployed on the registry's chain, and each registry deployment keeps its own
 names.
 
+What "the Safe's own" means, precisely: whoever controls the account at the
+Safe's address *on the registry's chain* chose it. A Safe replayed there
+starts with its original owners, so an owner removed on the chain the user
+actually uses still controls the copy on Gnosis until the owners are synced,
+and can rename it; and code running as the Safe (a module, a delegatecall)
+can rename it too. A wallet that shows a name as the user's checks that the
+Safe on the registry's chain has the same owners and threshold as on the
+chain the user uses, and says where the name was set. Other rules for
+readers of names:
+
+- **Write, then read back.** A `record` sent to a public mempool can be
+  copied with another name and mined first; the original returns
+  `created = false`. After recording, read the stored name: if it is not
+  the one sent, show it as the first writer's, not the user's.
+- **Render names as text.** They are raw bytes: not checked for UTF-8, and
+  may carry control or right-to-left characters.
+- **Listings can hold junk.** Anyone can record anything that hashes to an
+  address, with any name; a record whose setup does not decode, or whose
+  singleton or factory is not a known contract, deserves less prominence.
+- **Indexers follow `GenesisRenamed`** as well as `GenesisRecorded`.
+
 A page of 100 records with ~420-byte initializers costs about 5.7M gas to
 read (storage cold, as in an `eth_call`); a page's cost grows with its records' initializers, so a reader keeps
 `limit` within its node's `eth_call` gas cap. `total` comes back with every

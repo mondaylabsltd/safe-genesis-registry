@@ -31,9 +31,10 @@ pub struct Genesis {
     pub singleton: Address,
     pub salt_nonce: U256,
     pub initializer: Bytes,
-    /// The name the record is written with: a label, not part of the
-    /// address, never changed, not unique. The registry requires one; a
-    /// genesis resolved from chain history has none until a caller gives it.
+    /// The name the record is written with: a label, not part of the address,
+    /// not unique, and replaceable only by the Safe itself (`rename`). The
+    /// registry requires one; a genesis resolved from chain history has none
+    /// until a caller gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

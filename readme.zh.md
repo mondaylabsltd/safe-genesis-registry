@@ -33,6 +33,13 @@ genesisPage(uint256 offset, uint256 limit, bool desc)               // desc = �
 
 **名字。** 名字由第一个写入记录的人决定，所以名字本身不证明任何事：任何人都能登记一个参数公开的 Safe 并给它起名。Safe 自己可以随时用 `rename` 替换名字：`msg.sender` 必须是这个 Safe，也就是说这必须是 Safe 自己发出、由它的 owners 批准的交易。当 `renamedAt`（最后一次改名的区块号，从未改名则为 0）不为 0，或这条记录就是 Safe 自己写入的（`recorder == safe`）时，名字是 Safe 自己定的；否则是第一个写入者起的，读者应如实标明。改名只改名字，需要 Safe 已部署在 registry 所在的链上，每个 registry 部署各自保存自己的名字。
 
+"Safe 自己定的"准确含义是：在 **registry 所在的链上**控制这个 Safe 地址的人定的。在那条链上重放部署的 Safe 带的是初始 owners，所以在用户实际使用的链上已被移除的 owner，在 owners 同步之前仍控制着 Gnosis 上的副本，也就能改名；以 Safe 身份运行的代码（模块、delegatecall）同样能改名。钱包要把名字当作用户自己的名字展示之前，应核对 registry 所在链上的 Safe 与用户实际使用的链上的 Safe 的 owners 和阈值一致，并注明名字是在哪条链上设定的。其他读取名字的规则：
+
+- **写入后读回。** 发往公开 mempool 的 `record` 可能被人复制、换个名字抢先上链，原交易返回 `created = false`。登记后读回链上的名字，与发送的不同就当作第一个写入者的名字展示。
+- **名字按纯文本渲染。** 名字是原始字节，不校验 UTF-8，可能包含控制字符或从右到左字符。
+- **列表里可能有垃圾记录。** 任何人都能登记任何能推导出地址的参数并随意起名；setup 解不出、或 singleton / factory 不是已知合约的记录应降低展示权重。
+- **索引器除了 `GenesisRecorded` 还要跟踪 `GenesisRenamed`。**
+
 一页 100 条（initializer 约 420 字节）读取约 5.7M gas（按 `eth_call` 的冷存储计）；成本随每条记录的 initializer 增长，读取方应让 `limit` 不超过所用节点的 `eth_call` gas 上限。每页都返回 `total`：按最新在前翻页时，对比它就知道期间有没有新记录。写入顺序是每条链各自的，同一个 Safe 在不同链上的 `index` 不同。
 
 ## 为什么一个 Safe 只对应一条 genesis
