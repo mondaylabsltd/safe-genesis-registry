@@ -67,7 +67,8 @@ wallet should say so.
 
 A Safe renames itself with a Safe transaction `{to: <registry>, data:
 rename(name)}` on the registry's chain, proposed and approved like any other
-(the mailbox below); it must be deployed there.
+(the mailbox below) and executed by the wallet, which pays for it: the
+service never sponsors a rename. The Safe must be deployed there.
 
 ### `GET /api/registry/{chainId}?offset=0&limit=20&order=newest|oldest`
 

@@ -166,13 +166,14 @@ an address no Safe lives at.
   on a chain can deploy it from `deployCallOf`. The service records a Safe
   deployed nowhere yet at its own expense on Gnosis when an owner's passkey asks
   (`ownerProof`, see the [API](genesis-cf/README.md)).
-- **Renaming:** the Safe calls `rename` on the registry's chain, so it must be
-  deployed there. On Gnosis that costs a fraction of a cent: anyone can deploy
-  it from `deployCallOf`, and the owners' signed Safe transaction calling
-  `rename` can be submitted by anyone (a relayer pays the gas). The copy on
-  Gnosis starts with the original owners; an owner removed on other chains
-  still holds a vote there until the owners are synced, so sync before relying
-  on its name.
+- **Renaming** is the user's own act, at the user's own cost; the service
+  never sponsors it (it sponsors only records on Gnosis). The Safe calls
+  `rename` on the registry's chain, so it must be deployed there: the wallet
+  deploys it from `deployCallOf` if needed (on Gnosis a fraction of a cent),
+  then sends the owners' Safe transaction `{to: registry, data: rename(name)}`
+  like any other, paying its gas. The copy on Gnosis starts with the original
+  owners; an owner removed on other chains still holds a vote there until
+  the owners are synced, so sync before relying on its name.
 - **A Safe created elsewhere** (for example by Safe{Wallet}): fetch its
   creation parameters once (the creation transaction, or a transaction
   service), then `record` them. From then on nobody needs that source again.
