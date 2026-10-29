@@ -43,9 +43,17 @@ impl Config {
             .parse()
             .map_err(|_| "REGISTRY_ADDRESS is not an address")?;
         let home_chain_id = var("HOME_CHAIN_ID").and_then(|v| v.parse().ok()).unwrap_or(100);
-        let chains: Vec<ChainConfig> =
+        let mut chains: Vec<ChainConfig> =
             serde_json::from_str(&var("CHAINS").unwrap_or_else(|| genesis_rules::DEFAULT_CHAINS_JSON.to_owned()))
                 .map_err(|e| format!("CHAINS is not valid: {e}"))?;
+        // A private endpoint first where there is one; the public ones stay.
+        if let Some(key) = var("ALCHEMY_API_KEY") {
+            for c in &mut chains {
+                if let Some(url) = genesis_rules::alchemy_rpc(c.chain_id, &key) {
+                    c.rpcs.insert(0, url);
+                }
+            }
+        }
         if !chains.iter().any(|c| c.chain_id == home_chain_id) {
             return Err("HOME_CHAIN_ID is not in the chain table".into());
         }

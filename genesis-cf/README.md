@@ -312,6 +312,7 @@ minute and replaced at the same nonce (+25% fees) after three.
 | `MAX_FEE_WEI` | var | `10000000` (0.01 gwei): above it nothing is sent, the task waits |
 | `MIN_SPONSOR_BALANCE_WEI` | var | `10000000000000000` (0.01): the low-balance alert's floor |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | secrets | none: alerts are only listed in `/api/health` |
+| `ALCHEMY_API_KEY` | secret | none: public endpoints only. Set, an Alchemy endpoint goes first on Ethereum, Gnosis, Base, OP, Arbitrum and Polygon; the public ones stay as fallbacks |
 | `CHAINS` | var | `genesis-rules/data/chains.json`: `[{"chainId", "name", "rpcs": [..], "txService", "registry"}]`; `registry: true` where the registry is deployed (Gnosis, Ethereum) |
 
 ## Run it

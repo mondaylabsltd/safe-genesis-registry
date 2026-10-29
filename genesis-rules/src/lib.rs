@@ -61,3 +61,20 @@ pub use alloy::primitives::{Address, B256, Bytes, U256};
 /// `[{"chainId", "name", "rpcs": [..], "txService"}]`; shells parse it into
 /// their own config type.
 pub const DEFAULT_CHAINS_JSON: &str = include_str!("../data/chains.json");
+
+/// An Alchemy endpoint for `chain_id`, for a deployment with an
+/// `ALCHEMY_API_KEY`: shells put it before the chain's public endpoints (as
+/// p256-index does), which stay as fallbacks. `None` for a chain Alchemy
+/// does not serve here.
+pub fn alchemy_rpc(chain_id: u64, key: &str) -> Option<String> {
+    let network = match chain_id {
+        1 => "eth-mainnet",
+        100 => "gnosis-mainnet",
+        8453 => "base-mainnet",
+        10 => "opt-mainnet",
+        42161 => "arb-mainnet",
+        137 => "polygon-mainnet",
+        _ => return None,
+    };
+    Some(format!("https://{network}.g.alchemy.com/v2/{key}"))
+}
