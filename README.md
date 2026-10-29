@@ -215,7 +215,14 @@ forge test                                    # unit tests, no network
 FORK_RPC_GNOSIS=https://rpc.gnosischain.com \
 FORK_RPC_BASE=https://mainnet.base.org \
 forge test --mt Fork -vv                      # real Safe v1.3.0 / v1.4.1 on forks
+e2e/local.sh                                  # deploy on anvil, write, read back (add FORK_RPC_GNOSIS for real Safe v1.4.1)
 ```
+
+`e2e/local.sh` deploys the registry as production does (deterministic
+deployer, the production salt) on a fresh anvil and checks it with real
+transactions: events, the raw storage layout, write-once behaviour, every
+revert with its arguments, name edge cases, pagination against `safeAt`, the
+`eth_call` cost of pages, and a replay from `deployCallOf`.
 
 The fork tests create a Safe on Gnosis and record its genesis, swap an owner
 there, read the genesis back by the Safe's address and deploy it on Base: same
