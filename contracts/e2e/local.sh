@@ -17,7 +17,10 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-8547}
 RPC=http://127.0.0.1:$PORT
 ANVIL_PIDS=()
-cleanup() { for p in "${ANVIL_PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
+# Local and fork runs must not land in broadcast/, which records real deployments
+# (a Gnosis fork has chain id 100, like Gnosis itself).
+export FOUNDRY_BROADCAST; FOUNDRY_BROADCAST=$(mktemp -d)
+cleanup() { for p in "${ANVIL_PIDS[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$FOUNDRY_BROADCAST"; }
 trap cleanup EXIT
 
 start_anvil() { # port [fork-url]

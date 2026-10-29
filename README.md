@@ -179,7 +179,6 @@ salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
 the address depends on code alone, not comments: v3 (a required name, records enumerable in
 write order, `genesisPage`) is `0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E`.
-It is not deployed yet.
 
 ```shell
 cd contracts
@@ -189,6 +188,12 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 
 Anyone can deploy it on a new chain and gets the same contract at the same
 address.
+
+v3 deployments:
+
+| Network | Address | Deployment |
+| --- | --- | --- |
+| Arc Testnet (5042002) | `0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E` | tx `0x44b2cfa3fc1fc326621c44ce062cba23b0318432a26f5264a984275dc29d277e`, block 69608861; runtime code identical to this repo's build |
 
 v2 (a name written with the record, `recordNamed`; not enumerable, retired):
 
