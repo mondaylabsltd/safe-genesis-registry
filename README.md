@@ -63,10 +63,12 @@ in this registry's write order, its `name`, and `renamedAt`.
 own proves nothing: anyone can record a Safe whose parameters are public, and
 name it. The Safe itself can replace the name at any time with `rename`:
 `msg.sender` must be the Safe, so the call is the Safe's own transaction,
-approved by its owners. `renamedAt` (a block number, 0 if never) tells a
-reader which it is: 0 means the first writer's name, anything else the Safe's
-own. A rename changes nothing but the name; it needs the Safe deployed on that
-chain, and names are per chain.
+approved by its owners. A name is the Safe's own when `renamedAt` (the block
+of its last rename, 0 if never) is not zero, or when the Safe wrote the record
+itself (`recorder == safe`); otherwise it is the first writer's, and a reader
+should say so. A rename changes nothing but the name. It needs the Safe
+deployed on the registry's chain, and each registry deployment keeps its own
+names.
 
 A page of 100 records with ~420-byte initializers costs about 5.7M gas to
 read (storage cold, as in an `eth_call`); a page's cost grows with its records' initializers, so a reader keeps
@@ -151,11 +153,26 @@ an address no Safe lives at.
 
 ## Using it (for wallets)
 
+- **Where records live:** the registry is deployed on **Gnosis** and
+  **Ethereum** only, not on every chain a Safe uses; a Safe on any other chain
+  is deployed there from the record on one of these two (see *Expanding to a
+  new chain*).
+  - **Gnosis**: the service writes records at its own expense (sponsored).
+  - **Ethereum**: the wallet's user writes the record and pays for it,
+    typically from the Safe itself, so the record's `recorder` is the Safe and
+    its name is the Safe's own.
 - **Creating a Safe:** `record` its genesis. Deploying is not needed: the
   address is fixed on every chain from that moment, and the first transaction
   on a chain can deploy it from `deployCallOf`. The service records a Safe
-  deployed nowhere yet at its own expense when an owner's passkey asks
+  deployed nowhere yet at its own expense on Gnosis when an owner's passkey asks
   (`ownerProof`, see the [API](genesis-cf/README.md)).
+- **Renaming:** the Safe calls `rename` on the registry's chain, so it must be
+  deployed there. On Gnosis that costs a fraction of a cent: anyone can deploy
+  it from `deployCallOf`, and the owners' signed Safe transaction calling
+  `rename` can be submitted by anyone (a relayer pays the gas). The copy on
+  Gnosis starts with the original owners; an owner removed on other chains
+  still holds a vote there until the owners are synced, so sync before relying
+  on its name.
 - **A Safe created elsewhere** (for example by Safe{Wallet}): fetch its
   creation parameters once (the creation transaction, or a transaction
   service), then `record` them. From then on nobody needs that source again.
@@ -189,7 +206,7 @@ CREATE2 deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a fixed
 salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
 the address depends on code alone, not comments: v4 (a Safe renames itself,
-`rename`) is `0xF412388bF908E510066d3Be5c704bd9A327f945d`. It is not deployed yet.
+`rename`) is `0xF412388bF908E510066d3Be5c704bd9A327f945d`.
 
 ```shell
 cd contracts
@@ -197,8 +214,16 @@ forge script script/Deploy.s.sol --rpc-url $RPC                              # p
 forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 ```
 
-Anyone can deploy it on a new chain and gets the same contract at the same
-address.
+Production deployments are on Gnosis (written by the service, sponsored) and
+Ethereum (written by wallet users at their own cost); testnets are for testing.
+The contract has no owner and no constructor arguments, so anyone deploying it
+anywhere gets the same contract at the same address.
+
+v4 deployments:
+
+| Network | Address | Deployment |
+| --- | --- | --- |
+| Arc Testnet (5042002) | `0xF412388bF908E510066d3Be5c704bd9A327f945d` | tx `0xd432aada7afd6e164fe394f0030695c72b7a49772d7f97a60e126eb8457705af`, block 69618452; runtime code identical to this repo's build; source verified |
 
 v3 (a required name, records enumerable in write order; no rename, retired):
 

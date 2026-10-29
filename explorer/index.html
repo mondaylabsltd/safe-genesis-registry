@@ -104,6 +104,9 @@
   <div class="meta mono" id="meta"></div>
 
   <div class="bar">
+    <div class="seg" role="group" aria-label="Network" id="networks"></div>
+  </div>
+  <div class="bar">
     <div class="seg" role="group" aria-label="Order">
       <button data-order="desc" aria-pressed="true">Newest</button>
       <button data-order="asc" aria-pressed="false">Oldest</button>
@@ -133,7 +136,7 @@
   <footer>
     Reads <code>totalRecords</code> and <code>genesisPage(offset, limit, desc)</code>: one <code>eth_call</code> per page,
     plus one batched request for block times and deployment status. Override the source with
-    <code>?rpc=…&amp;registry=…&amp;explorer=…</code>.
+    <code>?network=gnosis|ethereum|arc</code>, or <code>?rpc=…&amp;registry=…&amp;explorer=…</code>.
   </footer>
 </main>
 
@@ -142,10 +145,19 @@ import { createPublicClient, http, decodeFunctionData, getAddress, isAddress, fo
 
 // -- configuration ------------------------------------------------------------
 const params = new URLSearchParams(location.search);
+// The registry lives on Gnosis (written by the Vela service) and Ethereum
+// (written by wallet users); the testnet is for testing.
+const REGISTRY = "0xF412388bF908E510066d3Be5c704bd9A327f945d";
+const NETWORKS = {
+  gnosis: { label: "Gnosis", rpc: "https://rpc.gnosischain.com", explorer: "https://gnosisscan.io" },
+  ethereum: { label: "Ethereum", rpc: "https://ethereum-rpc.publicnode.com", explorer: "https://etherscan.io" },
+  arc: { label: "Arc Testnet", rpc: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io" },
+};
+const network = NETWORKS[params.get("network")] ? params.get("network") : params.get("rpc") ? null : "gnosis";
 const CONFIG = {
-  rpc: params.get("rpc") || "https://rpc.testnet.arc.network",
-  registry: params.get("registry") || "0xF412388bF908E510066d3Be5c704bd9A327f945d",
-  explorer: (params.get("explorer") || "https://explorer.testnet.arc.io").replace(/\/$/, ""),
+  rpc: params.get("rpc") || NETWORKS[network].rpc,
+  registry: params.get("registry") || REGISTRY,
+  explorer: (params.get("explorer") || (network ? NETWORKS[network].explorer : "https://blockscan.com")).replace(/\/$/, ""),
 };
 const CHAIN_NAMES = { 1: "Ethereum", 10: "Optimism", 100: "Gnosis", 137: "Polygon", 8453: "Base", 42161: "Arbitrum One", 5042002: "Arc Testnet", 11155111: "Sepolia" };
 
@@ -214,6 +226,8 @@ function decodeName(hex) {
   try { return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), valid: true }; }
   catch { return { text: new TextDecoder("utf-8").decode(bytes), valid: false, hex }; }
 }
+// The Safe's own name: it renamed itself, or it wrote the record itself.
+const selfNamed = (safe, g) => g.renamedAt > 0n || g.recorder.toLowerCase() === safe.toLowerCase();
 function decodeSetup(initializer) {
   try {
     const { functionName, args } = decodeFunctionData({ abi: SETUP_ABI, data: initializer });
@@ -258,7 +272,7 @@ function renderEntry(e, open = false) {
     setup ? el("span", { class: "badge b-muted" }, `${setup.threshold} of ${setup.owners.length}`) : el("span", { class: "badge b-warn" }, "not a Safe setup"),
     e.deployed === true ? el("span", { class: "badge b-ok" }, "deployed here") : e.deployed === false ? el("span", { class: "badge b-muted" }, "not deployed here") : null,
     name.valid ? null : el("span", { class: "badge b-warn", title: "The name's bytes are not valid UTF-8" }, "not UTF-8"),
-    g.renamedAt > 0n ? el("span", { class: "badge b-ok", title: "The Safe set this name itself, by its owners' transaction" }, "named by the Safe") : null,
+    selfNamed(e.safe, g) ? el("span", { class: "badge b-ok", title: "The Safe chose this name itself, by its owners' transaction" }, "named by the Safe") : null,
   );
   const li = el("li", { class: open ? "open" : "" });
   const row = el("button", { class: "row", type: "button", "aria-expanded": String(open), onclick: () => {
@@ -276,6 +290,7 @@ function renderEntry(e, open = false) {
       name.valid ? null : el("div", { class: "mono", style: "color:var(--muted)" }, `raw bytes ${name.hex}`),
       el("div", { style: "color:var(--muted);font-size:13px" }, g.renamedAt > 0n
         ? ["set by the Safe itself, ", el("a", { href: blockUrl(g.renamedAt), target: "_blank", rel: "noopener" }, `block ${g.renamedAt}`)]
+        : selfNamed(e.safe, g) ? "set by the Safe itself, which wrote the record"
         : ["set by the first writer ", addrLink(g.recorder, short(g.recorder)), " — not verified"]))],
     ["Index", el("span", { class: "mono" }, `${g.index}  (safeAt(${g.index}))`)],
     ["Version", el("span", {}, version || "unknown singleton", el("span", { class: "mono", style: "color:var(--muted);margin-left:8px" }, g.singleton))],
@@ -335,6 +350,13 @@ async function load() {
     if (state.chainId == null) {
       state.chainId = await client.getChainId();
       $("chain-name").textContent = CHAIN_NAMES[state.chainId] || `chain ${state.chainId}`;
+      const code = await client.getCode({ address: CONFIG.registry });
+      if (!code || code === "0x") {
+        state.chainId = null;
+        $("dot").className = "dot off"; $("total").textContent = "–"; $("list").replaceChildren(); $("meta").textContent = "";
+        setNotice(`The registry is not deployed on ${$("chain-name").textContent} yet (${CONFIG.registry}).`);
+        return;
+      }
       const version = await client.readContract({ address: CONFIG.registry, abi: REGISTRY_ABI, functionName: "VERSION" });
       $("meta").textContent = `registry ${CONFIG.registry} · v${version} · ${CONFIG.rpc}`;
     }
@@ -377,6 +399,11 @@ async function lookup(input) {
 
 // -- wiring -----------------------------------------------------------------------
 $("contract-link").href = addrUrl(CONFIG.registry);
+for (const [key, n] of Object.entries(NETWORKS)) {
+  $("networks").append(el("button", { type: "button", "aria-pressed": String(key === network), onclick: () => {
+    const next = new URLSearchParams(); next.set("network", key); location.search = next.toString();
+  } }, n.label));
+}
 document.querySelectorAll("[data-order]").forEach((b) => b.addEventListener("click", () => { state.order = b.dataset.order; state.page = 0; remember(); load(); }));
 document.querySelectorAll("[data-size]").forEach((b) => b.addEventListener("click", () => { state.size = Number(b.dataset.size); state.page = 0; remember(); load(); }));
 $("prev").addEventListener("click", () => { state.page = Math.max(0, state.page - 1); load(); });

@@ -31,7 +31,7 @@ genesisPage(uint256 offset, uint256 limit, bool desc)               // desc = �
 
 `Genesis` 包含以下字段：`factory`、`singleton`、`saltNonce`、`initializer`（即 `setup(...)` 调用，里面有初始成员、阈值、fallback handler、setup hook），`proxyCreationCodeHash`，仅作参考的 `recorder` 和 `recordedAt`，它在本登记表写入顺序中的 `index`，它的 `name`，以及 `renamedAt`。
 
-**名字。** 名字由第一个写入记录的人决定，所以名字本身不证明任何事：任何人都能登记一个参数公开的 Safe 并给它起名。Safe 自己可以随时用 `rename` 替换名字：`msg.sender` 必须是这个 Safe，也就是说这必须是 Safe 自己发出、由它的 owners 批准的交易。`renamedAt`（区块号，从未改名则为 0）告诉读者名字的来源：0 表示第一个写入者起的名字，非 0 表示 Safe 自己定的。改名只改名字，需要 Safe 已部署在那条链上，名字按链各自独立。
+**名字。** 名字由第一个写入记录的人决定，所以名字本身不证明任何事：任何人都能登记一个参数公开的 Safe 并给它起名。Safe 自己可以随时用 `rename` 替换名字：`msg.sender` 必须是这个 Safe，也就是说这必须是 Safe 自己发出、由它的 owners 批准的交易。当 `renamedAt`（最后一次改名的区块号，从未改名则为 0）不为 0，或这条记录就是 Safe 自己写入的（`recorder == safe`）时，名字是 Safe 自己定的；否则是第一个写入者起的，读者应如实标明。改名只改名字，需要 Safe 已部署在 registry 所在的链上，每个 registry 部署各自保存自己的名字。
 
 一页 100 条（initializer 约 420 字节）读取约 5.7M gas（按 `eth_call` 的冷存储计）；成本随每条记录的 initializer 增长，读取方应让 `limit` 不超过所用节点的 `eth_call` gas 上限。每页都返回 `total`：按最新在前翻页时，对比它就知道期间有没有新记录。写入顺序是每条链各自的，同一个 Safe 在不同链上的 `index` 不同。
 
@@ -65,7 +65,11 @@ safe         = address(keccak256(0xff ‖ factory ‖ salt ‖ initCodeHash)[12:
 
 ## 钱包怎么用
 
-- **创建 Safe：** `record` 它的 genesis 即可，不需要部署。从这一刻起它在每条链上的地址都确定了，某条链上的第一笔交易可以用 `deployCallOf` 顺带部署它。还没在任何链上部署的 Safe，只要一个 owner 用 passkey 发起请求（`ownerProof`，见 [API](genesis-cf/README.md)），服务就会代付写入。
+- **记录存在哪里：** registry 只部署在 **Gnosis** 和 **Ethereum** 上，不是 Safe 用到的每条链都部署；其他链上的 Safe 从这两条链之一的记录重放部署（见"扩展到新链"）。
+  - **Gnosis**：由服务代付写入。
+  - **Ethereum**：由钱包用户自己写入并付费，通常由 Safe 自己发交易，所以记录的 `recorder` 就是这个 Safe，名字也就是 Safe 自己定的。
+- **创建 Safe：** `record` 它的 genesis 即可，不需要部署。从这一刻起它在每条链上的地址都确定了，某条链上的第一笔交易可以用 `deployCallOf` 顺带部署它。还没在任何链上部署的 Safe，只要一个 owner 用 passkey 发起请求（`ownerProof`，见 [API](genesis-cf/README.md)），服务就会在 Gnosis 上代付写入。
+- **改名：** Safe 在 registry 所在的链上调用 `rename`，所以它必须先部署在那条链上。在 Gnosis 上花费不到一美分：任何人都能用 `deployCallOf` 部署它，owners 签好的、调用 `rename` 的 Safe 交易也可以由任何人提交（由中继付 gas）。Gnosis 上的副本一开始是初始 owners；在其他链上已被移除的 owner 在同步之前仍在这里有一票，所以依赖它的名字之前先同步 owners。
 - **别处创建的 Safe**（比如 Safe{Wallet}）：只需从创建交易或交易服务里取一次创建参数，然后 `record`。之后谁都不再需要那个来源。如果 `record` 返回的地址和这个 Safe 不一致，说明参数错了。
 - **扩展到新链：**
   1. 在任意一条有记录的链上调 `deployCallOf(safe)`。
@@ -74,7 +78,7 @@ safe         = address(keccak256(0xff ‖ factory ‖ salt ‖ initCodeHash)[12:
   4. 把 `data` 发给 `factory`（先模拟），部署后读回 owners、阈值、模块、fallback handler、guard，与 initializer 对照。也可以在目标链上再 `record` 一次。
   5. 先把成员同步到当前配置，再把这条链上的地址展示为可以安全收款。
 
-gas 开销（用仓库里的测试夹具：3 个成员，initializer 约 420 字节）：首次写入约 38.7 万，重复写入约 3.4 万，写满 8 KiB 约 700 万。主要花在存储上，在 L2 上很便宜，在以太坊主网上比较明显。
+gas 开销（用仓库里的测试夹具：3 个成员，initializer 约 420 字节）：首次写入约 43.3 万，重复写入约 3.5 万，改名约 3.7 万，写满 8 KiB 约 700 万。主要花在存储上，在 L2 上很便宜，在以太坊主网上比较明显。
 
 部署方式和测试命令见 [README.md](README.md)。
 

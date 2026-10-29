@@ -58,10 +58,12 @@ pragma solidity 0.8.28;
 ///           Whoever writes the record first chooses it, so on its own it
 ///           proves nothing, and names may repeat. The Safe itself can
 ///           replace it at any time (`rename`, called by the Safe, so by its
-///           owners' transaction), on a chain where it is deployed; a record
-///           whose `renamedAt` is not zero carries a name the Safe chose. A
-///           rename moves the label only: the genesis never changes. Names
-///           are per chain. The address is the Safe's identity.
+///           owners' transaction), on a chain where it is deployed. A name
+///           is the Safe's own when `renamedAt` is not zero, or when the Safe
+///           wrote the record itself (`recorder` is the Safe). A rename moves
+///           the label only: the genesis never changes. Each deployment of
+///           the registry keeps its own names. The address is the Safe's
+///           identity.
 ///         - The registry makes no external call.
 ///         - EVM CREATE2 only: chains that derive CREATE2 addresses
 ///           differently (zkSync Era) are out of scope.
@@ -105,7 +107,8 @@ contract SafeGenesisRegistry {
         /// Shares the storage slot of `recorder` and `recordedAt`.
         uint32 index;
         /// The name, 1 to 64 bytes: the first writer's, or the Safe's own
-        /// after a `rename`. A label: not part of the address, not unique.
+        /// after a `rename` (or when the Safe is the `recorder`). A label:
+        /// not part of the address, not unique.
         string name;
     }
 

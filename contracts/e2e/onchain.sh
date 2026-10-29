@@ -39,6 +39,10 @@ revert_data() {
   cast rpc eth_call "{\"to\":\"$R\",\"data\":\"$1\"}" latest --rpc-url "$RPC" 2>&1 \
     | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*"?' | tail -1 | tr -d '"'
 }
+revert_data_from() { # sender calldata
+  cast rpc eth_call "{\"from\":\"$1\",\"to\":\"$R\",\"data\":\"$2\"}" latest --rpc-url "$RPC" 2>&1 \
+    | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*"?' | tail -1 | tr -d '"'
+}
 total() { cast call $R 'totalRecords()(uint256)' --rpc-url "$RPC" | awk '{print $1}'; }
 genesis_json() { cast call $R "genesisOf(address)(bool,$GT)" "$1" --rpc-url "$RPC" --json; }
 field() { genesis_json "$1" | jq -r ".[1][$2]"; } # 0 factory, 1 singleton, 2 renamedAt, 3 saltNonce, 4 initializer, 5 code hash, 6 recorder, 7 recordedAt, 8 index, 9 name
@@ -130,8 +134,8 @@ else
   eq "genesisOf: code hash"  "$(field $SAFE 5)" "$(cast keccak $CODE)"
   eq "genesisOf: recorder"   "$(field $SAFE 6)" "$ME"
   eq "genesisOf: recordedAt" "$(field $SAFE 7)" "$BLOCK"
-  eq "genesisOf: name"       "$(field $SAFE 9)"
-  eq "genesisOf: renamedAt"  "$(field $SAFE 2)" 0 "$NAME"
+  eq "genesisOf: name"       "$(field $SAFE 9)" "$NAME"
+  eq "genesisOf: renamedAt"  "$(field $SAFE 2)" 0
   IDX=$(field $SAFE 8)
   [ "$IDX" -ge "$BEFORE" ] && ok "index $IDX follows the $BEFORE records before it" || bad "index $IDX < $BEFORE"
   eq "safeAt(index)" "$(cast call $R 'safeAt(uint256)(address)' $IDX --rpc-url "$RPC")" "$SAFE"
@@ -166,7 +170,7 @@ else
 
   echo "== 7. rename: the Safe renames itself through execTransaction"
   RENAME_TO="Renamed by the Safe $STAMP"
-  eq "the key's own address: NotRecorded" "$(cast rpc eth_call "{\"from\":\"$ME\",\"to\":\"$R\",\"data\":\"$(cast calldata 'rename(string)' x)\"}" latest --rpc-url "$RPC" 2>&1 | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*' | tail -1)" "$(err 'NotRecorded(address)' $ME)"
+  eq "the key alone: NotRecorded" "$(revert_data_from $ME "$(cast calldata 'rename(string)' x)")" "$(err 'NotRecorded(address)' $ME)"
   RX=$(safe_exec "$RPC" $SAFE $R "$(cast calldata 'rename(string)' "$RENAME_TO")" "$PRIVATE_KEY")
   echo "  rename tx $(echo "$RX" | jq -r .transactionHash)"
   eq "execTransaction status" "$(echo "$RX" | jq -r .status)" 0x1
