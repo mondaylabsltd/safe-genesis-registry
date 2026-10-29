@@ -263,9 +263,15 @@ one. At the fee cap it waits, and the stuck-queue alert says so.
 
 ### Alerts
 
-Every maintenance tick (cron, every minute) checks the sponsor balance on
-the home chain against `MIN_SPONSOR_BALANCE_WEI`, the queue (a task untouched
-for 15 minutes, active tasks with no alarm scheduled) and newly failed tasks.
+Every maintenance tick (cron, every minute) checks the sponsor wallet on
+the home chain: low when below `MIN_SPONSOR_BALANCE_WEI`, or when it pays
+for fewer than 100 records at today's fee (~500k gas each; a fee spike can
+empty a balance that looks large). The message names the wallet, the chain,
+the balance, the records left and the fee. It also checks every home-chain
+RPC failing, the queue (a task untouched for 15 minutes, active tasks with
+no alarm scheduled) and newly failed tasks. Once a day a heartbeat reports
+the wallet (balance, records left), the imports, each registry's status and
+the version, so a silent channel means "fine", never "alerting is down".
 A condition is reported once, repeated every 6 hours while it lasts, and
 reported again when it clears; failed tasks are reported each time. Delivered
 over Telegram when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set;

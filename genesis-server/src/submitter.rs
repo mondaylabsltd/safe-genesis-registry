@@ -71,15 +71,24 @@ async fn maintain(app: &App) -> Result<(), String> {
     let active = store.active(1000).map_err(|e| e.to_string())?;
     let now = crate::now_ms();
     let last_tick = store.meta("lastTickMs").map_err(|e| e.to_string())?.unwrap_or(now as i64);
-    let balance = match cfg.private_key.as_deref().map(signer::address) {
-        Some(Ok(sponsor)) => Some(Rpc::new(cfg.home()).balance(sponsor).await.map_err(|e| e.to_string())),
-        Some(Err(e)) => Some(Err(e)),
+    let home = Rpc::new(cfg.home());
+    let sponsor = cfg.private_key.as_deref().map(signer::address);
+    let balance = match &sponsor {
+        Some(Ok(a)) => Some(home.balance(*a).await.map_err(|e| e.to_string())),
+        Some(Err(e)) => Some(Err(e.clone())),
         None => None,
+    };
+    // What a sponsored write pays per gas now: the runway's denominator.
+    let fee_per_gas_wei = match &sponsor {
+        Some(Ok(_)) => home.base_fee().await.ok().map(|b| b + genesis_rules::fees::DEFAULT_TIP_WEI),
+        _ => None,
     };
     let facts = Facts {
         now_ms: now,
-        sponsor_balance_wei: balance,
+        sponsor_balance_wei: balance.clone(),
         min_balance_wei: cfg.min_balance_wei,
+        fee_per_gas_wei,
+        home_rpc_down: Rpc::is_open(cfg.home()),
         active_tasks: active.len() as u64,
         oldest_active_updated_ms: active.iter().map(|t| t.updated_ms).min(),
         newly_failed: store.failed_since(last_tick).map_err(|e| e.to_string())?,
@@ -87,22 +96,67 @@ async fn maintain(app: &App) -> Result<(), String> {
         alarm_armed: cfg.private_key.is_none()
             || now.saturating_sub(app.heartbeat_ms.load(Ordering::Relaxed)) < STALE_AFTER_MS,
     };
+    let ctx = sentinel::Context {
+        service: "safe-genesis-registry",
+        chain_id: cfg.home_chain_id,
+        chain_name: &cfg.home().name,
+        sponsor: sponsor.as_ref().and_then(|s| s.as_ref().ok().copied()),
+    };
     let (notices, state) = sentinel::due(&sentinel::evaluate(&facts), &store.alerts().map_err(|e| e.to_string())?, now);
     for n in &notices {
-        let text = sentinel::message(n, "safe-genesis-registry", cfg.home_chain_id);
+        let text = sentinel::message(n, &ctx);
         tracing::warn!(alert = %text);
-        if let (Some(token), Some(chat)) = (&cfg.telegram_bot_token, &cfg.telegram_chat_id) {
-            let url = format!("https://api.telegram.org/bot{token}/sendMessage");
-            if !crate::rpc::post_json(&url, &json!({"chat_id": chat, "text": text})).await {
-                tracing::warn!("telegram alert delivery failed");
-            }
-        }
+        notify(app, &text).await;
     }
     store.replace_alerts(&state).map_err(|e| e.to_string())?;
+
+    // Once a day, the state of things even when nothing is wrong.
+    let last_heartbeat = store.meta("lastHeartbeatMs").map_err(|e| e.to_string())?.map(|v| v as u64);
+    if sentinel::heartbeat_due(last_heartbeat, now) {
+        let counts = store.counts().map_err(|e| e.to_string())?;
+        let count = |k: &str| counts.get(k).copied().unwrap_or(0) as u64;
+        let registries = crate::reads::registry_status(cfg)
+            .await
+            .iter()
+            .map(|r| {
+                let id = r["chainId"].as_u64().unwrap_or(0);
+                let name = cfg.chain(id).map(|c| c.name.clone()).unwrap_or_else(|| id.to_string());
+                (name, r["status"].as_str().unwrap_or("?").to_owned())
+            })
+            .collect();
+        let text = sentinel::heartbeat_message(
+            &sentinel::Heartbeat {
+                balance_wei: balance.and_then(Result::ok),
+                fee_per_gas_wei,
+                active_tasks: count("queued") + count("submitted"),
+                done_tasks: count("done"),
+                failed_tasks: count("failed"),
+                registries,
+                alerts_holding: sentinel::holding(&state),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            &ctx,
+        );
+        tracing::info!(heartbeat = %text);
+        notify(app, &text).await;
+        store.set_meta("lastHeartbeatMs", now as i64).map_err(|e| e.to_string())?;
+    }
+
     match store.prune(now as i64) {
         Ok((0, 0)) => {}
         Ok((tasks, proposals)) => tracing::info!(tasks, proposals, "pruned"),
         Err(e) => tracing::warn!(error = %e, "prune failed"),
     }
     store.set_meta("lastTickMs", now as i64).map_err(|e| e.to_string())
+}
+
+/// Telegram, when configured; the log always has the text.
+async fn notify(app: &App, text: &str) {
+    let cfg = &app.config;
+    if let (Some(token), Some(chat)) = (&cfg.telegram_bot_token, &cfg.telegram_chat_id) {
+        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        if !crate::rpc::post_json(&url, &json!({"chat_id": chat, "text": text})).await {
+            tracing::warn!("telegram delivery failed");
+        }
+    }
 }

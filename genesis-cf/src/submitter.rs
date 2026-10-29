@@ -263,28 +263,79 @@ impl SubmitterDo {
             .sql()
             .exec("SELECT count(*) AS n FROM tasks WHERE status = 'failed' AND updated > ?1", vec![SqlStorageValue::from(last_tick)])?
             .to_array()?;
-        let balance = match config.private_key.as_deref().map(signer::address) {
-            Some(Ok(sponsor)) => Some(Rpc::new(config.home()).balance(sponsor).await.map_err(|e| e.to_string())),
-            Some(Err(e)) => Some(Err(e)),
+        let home = Rpc::new(config.home());
+        let sponsor = config.private_key.as_deref().map(signer::address);
+        let balance = match &sponsor {
+            Some(Ok(a)) => Some(home.balance(*a).await.map_err(|e| e.to_string())),
+            Some(Err(e)) => Some(Err(e.clone())),
             None => None,
+        };
+        // What a sponsored write pays per gas now: the runway's denominator.
+        let fee_per_gas_wei = match &sponsor {
+            Some(Ok(_)) => home.base_fee().await.ok().map(|b| b + genesis_rules::fees::DEFAULT_TIP_WEI),
+            _ => None,
         };
         // Measured BEFORE re-arming: an alarm lost while work waits is
         // exactly what this alert exists to report.
         let alarm_armed = self.state.storage().get_alarm().await?.is_some();
         let facts = Facts {
             now_ms: now,
-            sponsor_balance_wei: balance,
+            sponsor_balance_wei: balance.clone(),
             min_balance_wei: config.min_balance_wei,
+            fee_per_gas_wei,
+            home_rpc_down: Rpc::is_open(config.home()),
             active_tasks: active.len() as u64,
             oldest_active_updated_ms: active.iter().map(|t| t.updated_ms).min(),
             newly_failed: newly_failed.first().and_then(|r| r.n).unwrap_or(0) as u64,
             alarm_armed: alarm_armed || config.private_key.is_none(),
         };
+        let ctx = sentinel::Context {
+            service: "safe-genesis-registry",
+            chain_id: config.home_chain_id,
+            chain_name: &config.home().name,
+            sponsor: sponsor.as_ref().and_then(|s| s.as_ref().ok().copied()),
+        };
         let (notices, state) = sentinel::due(&sentinel::evaluate(&facts), &self.alerts()?, now);
-        if let Some(telegram) = Telegram::new(config.telegram_bot_token.clone(), config.telegram_chat_id.clone()) {
-            for n in &notices {
-                telegram.send(&sentinel::message(n, "safe-genesis-registry", config.home_chain_id)).await;
+        let telegram = Telegram::new(config.telegram_bot_token.clone(), config.telegram_chat_id.clone());
+        for n in &notices {
+            let text = sentinel::message(n, &ctx);
+            worker::console_warn!("{text}");
+            if let Some(t) = &telegram {
+                t.send(&text).await;
             }
+        }
+        // Once a day, the state of things even when nothing is wrong.
+        let last_heartbeat = self.meta("lastHeartbeatMs")?.map(|v| v as u64);
+        if sentinel::heartbeat_due(last_heartbeat, now) {
+            let rows: Vec<CountRow> = self.sql().exec("SELECT status, count(*) AS n FROM tasks GROUP BY status", None)?.to_array()?;
+            let count = |k: &str| rows.iter().find(|r| r.status == k).map(|r| r.n as u64).unwrap_or(0);
+            let registries = crate::reads::registry_status(&config)
+                .await
+                .iter()
+                .map(|r| {
+                    let id = r["chainId"].as_u64().unwrap_or(0);
+                    let name = config.chain(id).map(|c| c.name.clone()).unwrap_or_else(|| id.to_string());
+                    (name, r["status"].as_str().unwrap_or("?").to_owned())
+                })
+                .collect();
+            let text = sentinel::heartbeat_message(
+                &sentinel::Heartbeat {
+                    balance_wei: balance.and_then(Result::ok),
+                    fee_per_gas_wei,
+                    active_tasks: count("queued") + count("submitted"),
+                    done_tasks: count("done"),
+                    failed_tasks: count("failed"),
+                    registries,
+                    alerts_holding: sentinel::holding(&state),
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                },
+                &ctx,
+            );
+            worker::console_log!("{text}");
+            if let Some(t) = &telegram {
+                t.send(&text).await;
+            }
+            self.set_meta("lastHeartbeatMs", now as i64)?;
         }
         self.sql().exec("DELETE FROM alerts", None)?;
         for (key, sent_ms) in state {

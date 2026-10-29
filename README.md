@@ -224,6 +224,8 @@ v4 deployments:
 
 | Network | Address | Deployment |
 | --- | --- | --- |
+| Gnosis (100) | `0xF412388bF908E510066d3Be5c704bd9A327f945d` | tx `0x0c2d8c40d951881cc6f9179a8f2fa1bdd5cf2f34938b85f00239d7b22fc4c5eb`, block 48999181; runtime code identical to this repo's build; source verified on Sourcify |
+| Ethereum (1) | `0xF412388bF908E510066d3Be5c704bd9A327f945d` | tx `0xb2c83e7e6b1d52aa8064539862851d831fded50a1b844123616f3d02aa7ec342`, block 26296633; runtime code identical to this repo's build; source verified on Sourcify and Blockscout |
 | Arc Testnet (5042002) | `0xF412388bF908E510066d3Be5c704bd9A327f945d` | tx `0xd432aada7afd6e164fe394f0030695c72b7a49772d7f97a60e126eb8457705af`, block 69618452; runtime code identical to this repo's build; source verified |
 
 v3 (a required name, records enumerable in write order; no rename, retired):
