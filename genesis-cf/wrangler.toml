@@ -15,10 +15,8 @@
 # table, genesis-rules/data/chains.json).
 # Local development: copy .dev.vars.example to .dev.vars, then `npx wrangler dev`.
 #
-# Serve it on a custom domain, not only on *.workers.dev: the response cache
-# (the Cache API) only works on a zone of yours. Per deployment, e.g.:
-#
-#   routes = [{ pattern = "genesis.example.com", custom_domain = true }]
+# Served on a custom domain (routes, below), not only on *.workers.dev: the
+# response cache (the Cache API) only works on a zone of yours.
 #
 # Preview deployments (version uploads, Workers Builds previews) run against
 # the SAME Durable Object and secrets as production: the same sponsor key and
@@ -28,6 +26,9 @@ name = "safe-genesis"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-05-01"
 keep_vars = true
+
+# Served on a zone of ours: the response cache (the Cache API) needs one.
+routes = [{ pattern = "safe-genesis.getvela.app", custom_domain = true }]
 
 [build]
 command = "sh build.sh"
