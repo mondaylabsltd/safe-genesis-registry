@@ -65,12 +65,14 @@ fn genesis_of_response_round_trips() {
         proxyCreationCodeHash: keccak256(proxy_code()),
         recorder: OWNER_A,
         recordedAt: 42,
+        index: 7,
         name: String::new(),
     };
     let ret = (true, abi.clone()).abi_encode_params();
     let rec = genesis::decode_genesis_of(&ret).unwrap().unwrap();
     assert_eq!(rec.genesis, g);
     assert_eq!(rec.recorded_at, 42);
+    assert_eq!(rec.index, 7);
     let safe = g.address(&proxy_code());
     assert!(rec.belongs_to(safe, &proxy_code()));
     assert!(!rec.belongs_to(safe, b"other code"));
@@ -84,6 +86,7 @@ fn genesis_of_response_round_trips() {
         proxyCreationCodeHash: B256::ZERO,
         recorder: Address::ZERO,
         recordedAt: 0,
+        index: 0,
         name: String::new(),
     };
     let empty = (false, blank).abi_encode_params();
@@ -102,7 +105,7 @@ fn deploy_and_record_calls_carry_the_genesis() {
 
 #[test]
 fn genesis_recorded_log_decodes() {
-    let g = two_of_three();
+    let g = Genesis { name: Some("Team fund".into()), ..two_of_three() };
     let safe = g.address(&proxy_code());
     let e = ISafeGenesisRegistry::GenesisRecorded {
         safe,
@@ -111,6 +114,7 @@ fn genesis_recorded_log_decodes() {
         saltNonce: g.salt_nonce,
         proxyCreationCodeHash: keccak256(proxy_code()),
         initializer: g.initializer.clone(),
+        name: "Team fund".into(),
     };
     let log = e.encode_log_data();
     assert_eq!(log.topics()[0], genesis::GENESIS_RECORDED_TOPIC);
@@ -490,14 +494,25 @@ fn drift_ignores_order_and_reports_changes() {
 // -- names ------------------------------------------------------------------------
 
 #[test]
-fn a_name_is_a_label_the_registry_takes_or_refuses_by_length() {
+fn a_name_is_required_and_a_label_the_registry_takes_or_refuses_by_length() {
     let named = |name: &str| Genesis { name: Some(name.into()), ..two_of_three() };
-    assert!(two_of_three().named_right(), "no name is fine");
+    assert!(!two_of_three().named_right(), "the registry requires a name");
     assert!(named("Team fund").named_right());
     assert!(!named("").named_right());
     assert!(!named(&"x".repeat(65)).named_right());
     // Not part of the address.
     assert_eq!(named("Team fund").address(&proxy_code()), two_of_three().address(&proxy_code()));
+}
+
+#[test]
+fn a_default_name_follows_from_the_address() {
+    let names: std::collections::HashSet<String> =
+        (0u8..64).map(|i| genesis::default_name(Address::repeat_byte(i))).collect();
+    assert!(names.len() > 32, "addresses spread over the word lists");
+    for name in &names {
+        assert!(Genesis { name: Some(name.clone()), ..two_of_three() }.named_right(), "{name}");
+    }
+    assert_eq!(genesis::default_name(OWNER_A), genesis::default_name(OWNER_A));
 }
 
 #[test]
@@ -511,12 +526,13 @@ fn a_named_record_round_trips_and_records_by_name() {
         proxyCreationCodeHash: keccak256(proxy_code()),
         recorder: OWNER_A,
         recordedAt: 42,
+        index: 0,
         name: "Team fund".into(),
     };
     let rec = genesis::decode_genesis_of(&(true, abi).abi_encode_params()).unwrap().unwrap();
     assert_eq!(rec.genesis, g);
-    let call = g.record_call(&proxy_code());
-    assert_eq!(&call[..4], ISafeGenesisRegistry::recordNamedCall::SELECTOR.as_slice());
+    let call = ISafeGenesisRegistry::recordCall::abi_decode(&g.record_call(&proxy_code())).unwrap();
+    assert_eq!(call.name, "Team fund");
     let json = serde_json::to_value(&g).unwrap();
     assert_eq!(json["name"], "Team fund");
     assert_eq!(serde_json::from_value::<Genesis>(json).unwrap(), g);

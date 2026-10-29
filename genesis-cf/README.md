@@ -81,10 +81,15 @@ the authority the replay would create (only when `ready`).
 ### `POST /api/import`
 
 ```json
-{"chainId": 8453, "safe": "0x…"}
-{"chainId": 8453, "safe": "0x…", "safeWalletProps": {…}}                  // a Safe{Wallet} Safe deployed nowhere yet
-{"chainId": 100,  "safe": "0x…", "genesis": {…}, "ownerProof": {…}}       // a wallet that just created it
+{"chainId": 8453, "safe": "0x…", "name": "Team fund"}
+{"chainId": 8453, "safe": "0x…", "name": "Team fund", "safeWalletProps": {…}}   // a Safe{Wallet} Safe deployed nowhere yet
+{"chainId": 100,  "safe": "0x…", "genesis": {…, "name": "Team fund"}, "ownerProof": {…}}   // a wallet that just created it
 ```
+
+Every record carries a name (1 to 64 bytes; a label, not part of the address). A record copied from another chain
+keeps its name, and so does a `genesis` sent with one; otherwise `name` is used, and without it the Safe gets a
+default name drawn from its address (like "Quiet Harbor": the same on every retry). A `name` the registry would
+not take (empty, over 64 bytes) is refused (`unrecordable`), not replaced.
 
 Resolves the Safe's genesis on `chainId`, in this order:
 

@@ -36,6 +36,7 @@ pub fn genesis(safe: Address, l: &Lookup) -> (u16, Value) {
             "proxyCreationCodeHash": r.proxy_creation_code_hash,
             "recorder": r.recorder,
             "recordedAt": r.recorded_at,
+            "index": r.index,
             "setup": setup,
             "setupDefects": setup.as_ref().map(|s| s.defects(safe, version)),
             "deployCall": {"to": r.genesis.factory, "data": r.genesis.deploy_call()},

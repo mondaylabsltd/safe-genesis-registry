@@ -79,7 +79,7 @@ contract ForkSafeTest is Test {
         SafeGenesisRegistry gnosisRegistry = new SafeGenesisRegistry();
         address safe = ISafeProxyFactory(factory).createProxyWithNonce(singleton, initializer, saltNonce);
         (address recorded, bool created) = gnosisRegistry.record(
-            factory, ISafeProxyFactory(factory).proxyCreationCode(), singleton, initializer, saltNonce
+            factory, ISafeProxyFactory(factory).proxyCreationCode(), singleton, initializer, saltNonce, "Fork Safe"
         );
         assertTrue(created);
         assertEq(recorded, safe, "the registry files it under the address the factory deployed");

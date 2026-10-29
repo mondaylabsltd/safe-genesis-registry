@@ -27,6 +27,22 @@ pub enum Resolution {
     NotFound,
 }
 
+impl Resolution {
+    /// Give a found genesis that has no name this one. A name it has already
+    /// (from a record on another chain, or from the caller's genesis) stays.
+    pub fn named(self, name: Option<String>) -> Self {
+        match self {
+            Resolution::Found { mut genesis, source } => {
+                if genesis.name.is_none() {
+                    genesis.name = name;
+                }
+                Resolution::Found { genesis, source }
+            }
+            other => other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Source {

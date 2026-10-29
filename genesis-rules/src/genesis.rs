@@ -21,16 +21,17 @@ pub struct Genesis {
     pub singleton: Address,
     pub salt_nonce: U256,
     pub initializer: Bytes,
-    /// A name written with the record (`recordNamed`): a label, not part of
-    /// the address, never changed, not unique.
+    /// The name the record is written with: a label, not part of the
+    /// address, never changed, not unique. The registry requires one; a
+    /// genesis resolved from chain history has none until a caller gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
 impl Genesis {
-    /// Whether a name, if any, is one the registry takes (1 to 64 bytes).
+    /// Whether it has a name the registry takes (1 to 64 bytes).
     pub fn named_right(&self) -> bool {
-        self.name.as_ref().is_none_or(|n| (1..=MAX_NAME_LENGTH).contains(&n.len()))
+        self.name.as_ref().is_some_and(|n| (1..=MAX_NAME_LENGTH).contains(&n.len()))
     }
 
     /// The address these parameters deploy to on a factory with this proxy code.
@@ -49,27 +50,17 @@ impl Genesis {
         .into()
     }
 
-    /// The registry's `record(...)` calldata for this genesis, or
-    /// `recordNamed(...)` for a named one.
+    /// The registry's `record(...)` calldata for this genesis. Without a
+    /// name it encodes an empty one, which the registry refuses: check
+    /// [`Self::named_right`] first.
     pub fn record_call(&self, proxy_creation_code: &[u8]) -> Bytes {
-        if let Some(name) = &self.name {
-            return ISafeGenesisRegistry::recordNamedCall {
-                factory: self.factory,
-                proxyCreationCode: proxy_creation_code.to_vec().into(),
-                singleton: self.singleton,
-                initializer: self.initializer.clone(),
-                saltNonce: self.salt_nonce,
-                name: name.clone(),
-            }
-            .abi_encode()
-            .into();
-        }
         ISafeGenesisRegistry::recordCall {
             factory: self.factory,
             proxyCreationCode: proxy_creation_code.to_vec().into(),
             singleton: self.singleton,
             initializer: self.initializer.clone(),
             saltNonce: self.salt_nonce,
+            name: self.name.clone().unwrap_or_default(),
         }
         .abi_encode()
         .into()
@@ -85,6 +76,9 @@ pub struct Recorded {
     pub proxy_creation_code_hash: B256,
     pub recorder: Address,
     pub recorded_at: u64,
+    /// Position in this registry's write order (`safeAt(index)`). Each chain's
+    /// registry counts its own records, so it differs between chains.
+    pub index: u32,
 }
 
 impl Recorded {
@@ -96,6 +90,25 @@ impl Recorded {
         keccak256(proxy_creation_code) == self.proxy_creation_code_hash
             && self.genesis.address(proxy_creation_code) == safe
     }
+}
+
+const NAME_ADJECTIVES: [&str; 32] = [
+    "Amber", "Brave", "Bright", "Calm", "Clever", "Cosmic", "Crimson", "Daring", "Eager", "Gentle", "Golden",
+    "Hidden", "Humble", "Jolly", "Kind", "Lucky", "Mellow", "Misty", "Noble", "Proud", "Quiet", "Rapid", "Silent",
+    "Silver", "Steady", "Sunny", "Swift", "Tidy", "Velvet", "Vivid", "Wild", "Wise",
+];
+const NAME_NOUNS: [&str; 32] = [
+    "Badger", "Beacon", "Brook", "Cedar", "Comet", "Falcon", "Fern", "Fox", "Glacier", "Harbor", "Heron", "Island",
+    "Lantern", "Maple", "Meadow", "Otter", "Owl", "Pebble", "Pine", "Raven", "Reef", "River", "Robin", "Sparrow",
+    "Summit", "Thistle", "Tiger", "Valley", "Willow", "Wolf", "Wren", "Zephyr",
+];
+
+/// A name for a Safe whose genesis came without one, like "Quiet Harbor".
+/// It looks random but follows from the address, so every retry and every
+/// service instance gives the same Safe the same name.
+pub fn default_name(safe: Address) -> String {
+    let h = keccak256(safe);
+    format!("{} {}", NAME_ADJECTIVES[h[0] as usize % 32], NAME_NOUNS[h[1] as usize % 32])
 }
 
 /// `genesisOf(safe)` calldata.
@@ -153,8 +166,13 @@ pub const GENESIS_RECORDED_TOPIC: B256 = ISafeGenesisRegistry::GenesisRecorded::
 pub fn decode_genesis_recorded(topics: &[B256], data: &[u8]) -> Option<(Address, Genesis, B256)> {
     let log = alloy::primitives::LogData::new(topics.to_vec(), data.to_vec().into())?;
     let e = ISafeGenesisRegistry::GenesisRecorded::decode_log_data(&log).ok()?;
-    let genesis =
-        Genesis { factory: e.factory, singleton: e.singleton, salt_nonce: e.saltNonce, initializer: e.initializer, name: None };
+    let genesis = Genesis {
+        factory: e.factory,
+        singleton: e.singleton,
+        salt_nonce: e.saltNonce,
+        initializer: e.initializer,
+        name: (!e.name.is_empty()).then_some(e.name),
+    };
     Some((e.safe, genesis, e.proxyCreationCodeHash))
 }
 
@@ -170,5 +188,6 @@ fn from_abi(g: ISafeGenesisRegistry::Genesis) -> Recorded {
         proxy_creation_code_hash: g.proxyCreationCodeHash,
         recorder: g.recorder,
         recorded_at: g.recordedAt,
+        index: g.index,
     }
 }

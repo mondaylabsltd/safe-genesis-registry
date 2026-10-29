@@ -92,7 +92,7 @@ contract RealSafesTest is Test {
         SafeGenesisRegistry registry = new SafeGenesisRegistry();
         for (uint256 i = 0; i < r.proxy.length; ++i) {
             (address safe, bool created) = registry.record(
-                r.factory[i], r.proxyCodes[r.codeIndex[i]], r.singleton[i], r.initializer[i], r.saltNonce[i]
+                r.factory[i], r.proxyCodes[r.codeIndex[i]], r.singleton[i], r.initializer[i], r.saltNonce[i], "Real Safe"
             );
             assertEq(safe, r.proxy[i], r.label[i]);
             assertTrue(created, r.label[i]);
@@ -156,7 +156,7 @@ contract RealSafesTest is Test {
                 continue;
             }
             registry.record(
-                r.factory[i], r.proxyCodes[r.codeIndex[i]], r.singleton[i], r.initializer[i], r.saltNonce[i]
+                r.factory[i], r.proxyCodes[r.codeIndex[i]], r.singleton[i], r.initializer[i], r.saltNonce[i], "Real Safe"
             );
             _deployOne(registry, r.proxy[i], r.label[i], t);
         }

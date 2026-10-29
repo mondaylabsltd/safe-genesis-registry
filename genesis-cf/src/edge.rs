@@ -279,6 +279,7 @@ impl Edge {
                 Err(answer) => return Ok(answer),
             }
         };
+        let resolution = resolution.named(req.name.clone());
         let mut task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, now_ms()) {
             Ok(t) => t,
             Err(refusal) => return Ok(view::import_refused(safe, &refusal)),
@@ -535,6 +536,8 @@ struct ImportRequest {
     genesis: Option<Genesis>,
     /// An owner asking for a Safe deployed nowhere yet to be sponsored.
     owner_proof: Option<OwnerProof>,
+    /// The name to record with, when the genesis found has none.
+    name: Option<String>,
 }
 
 /// `POST /api/proposals`: a transaction and one owner's approval of it.

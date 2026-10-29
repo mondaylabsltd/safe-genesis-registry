@@ -12,17 +12,25 @@ Safe 的地址永远由**创建调用**决定（factory、singleton、`setup()` 
 
 ```solidity
 // 写：Safe 地址由合约自己算，调用方不传
-record(address factory, bytes proxyCreationCode, address singleton, bytes initializer, uint256 saltNonce)
-    returns (address safe, bool created)
+record(address factory, bytes proxyCreationCode, address singleton, bytes initializer, uint256 saltNonce, string name)
+    returns (address safe, bool created)                            // name 必填，1 到 64 字节，不参与地址计算
 
 // 读：按 Safe 地址查
 genesisOf(address safe)    returns (bool found, Genesis genesis)
 deployCallOf(address safe) returns (address factory, bytes data)  // 把 data 发给 factory 即可部署
 isRecorded(address safe)   returns (bool)
 computeAddress(factory, proxyCreationCode, singleton, initializer, saltNonce) returns (address)
+
+// 读：按写入顺序（index 0 = 本链第一条记录）
+totalRecords()             returns (uint256)
+safeAt(uint256 index)      returns (address)
+genesisPage(uint256 offset, uint256 limit, bool desc)               // desc = 最新在前
+    returns (uint256 total, address[] safes, Genesis[] records)    // 完整记录，一次 eth_call
 ```
 
-`Genesis` 包含以下字段：`factory`、`singleton`、`saltNonce`、`initializer`（即 `setup(...)` 调用，里面有初始成员、阈值、fallback handler、setup hook），`proxyCreationCodeHash`，以及仅作参考的 `recorder` 和 `recordedAt`。
+`Genesis` 包含以下字段：`factory`、`singleton`、`saltNonce`、`initializer`（即 `setup(...)` 调用，里面有初始成员、阈值、fallback handler、setup hook），`proxyCreationCodeHash`，仅作参考的 `recorder` 和 `recordedAt`，它在本登记表写入顺序中的 `index`，以及写入时附带的 `name`。
+
+一页 100 条（initializer 约 420 字节）读取约 5.7M gas（按 `eth_call` 的冷存储计）；成本随每条记录的 initializer 增长，读取方应让 `limit` 不超过所用节点的 `eth_call` gas 上限。每页都返回 `total`：按最新在前翻页时，对比它就知道期间有没有新记录。写入顺序是每条链各自的，同一个 Safe 在不同链上的 `index` 不同。
 
 ## 为什么一个 Safe 只对应一条 genesis
 

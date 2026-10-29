@@ -36,19 +36,32 @@ This contract keeps them, keyed by the Safe's address, readable with one
 
 ```solidity
 // Write: the registry computes the Safe's address itself; the caller never supplies it
-record(address factory, bytes proxyCreationCode, address singleton, bytes initializer, uint256 saltNonce)
-    returns (address safe, bool created)
+record(address factory, bytes proxyCreationCode, address singleton, bytes initializer, uint256 saltNonce, string name)
+    returns (address safe, bool created)                            // name: required, 1 to 64 bytes, not part of the address
 
 // Read: by the Safe's own address
 genesisOf(address safe)    returns (bool found, Genesis genesis)
 deployCallOf(address safe) returns (address factory, bytes data)  // send `data` to `factory` to deploy it
 isRecorded(address safe)   returns (bool)
 computeAddress(factory, proxyCreationCode, singleton, initializer, saltNonce) returns (address)
+
+// Read: in write order (index 0 = the first record on this chain)
+totalRecords()             returns (uint256)
+safeAt(uint256 index)      returns (address)
+genesisPage(uint256 offset, uint256 limit, bool desc)               // desc = newest first
+    returns (uint256 total, address[] safes, Genesis[] records)    // complete records, one eth_call
 ```
 
 A `Genesis` holds `factory`, `singleton`, `saltNonce`, `initializer` (the
 `setup(...)` call: original owners, threshold, fallback handler, setup hook),
-`proxyCreationCodeHash`, and informational `recorder` / `recordedAt`.
+`proxyCreationCodeHash`, informational `recorder` / `recordedAt`, its `index`
+in this registry's write order, and the `name` it was written with.
+
+A page of 100 records with ~420-byte initializers costs about 5.7M gas to
+read (storage cold, as in an `eth_call`); a page's cost grows with its records' initializers, so a reader keeps
+`limit` within its node's `eth_call` gas cap. `total` comes back with every
+page: a reader paging newest-first compares it to tell that records arrived
+in between.
 
 ## Why one Safe has exactly one genesis
 
@@ -116,8 +129,10 @@ an address no Safe lives at.
 - `initializer` is at most 8 KiB (a full one costs about 7M gas to record,
   well under the 16.78M per-transaction cap); zero factory or singleton
   addresses and empty inputs are rejected.
-- `totalRecords` and `isRecorded` count any record, including ones filed at
-  addresses no Safe lives at; they do not show that an address is a Safe.
+- `totalRecords`, `isRecorded`, `safeAt` and `genesisPage` cover any record,
+  including ones filed at addresses no Safe lives at; they do not show that an
+  address is a Safe. Write order is per chain: the same Safe has a different
+  `index` on each chain.
 - The deterministic deployer this deploys through exists only where its
   pre-EIP-155 transaction can be included; a chain that refuses those gets the
   registry at another address. `recordedAt` is the chain's block number (on
@@ -153,7 +168,7 @@ an address no Safe lives at.
      receive on that chain.
 
 Gas, with this repo's fixtures (3-owner setup, ~420-byte initializer): about
-387k for the first write, 34k for a repeat; a full 8 KiB initializer about 7M. Storage dominates; it is cheap on
+433k for the first write, 35k for a repeat; a full 8 KiB initializer about 7M. Storage dominates; it is cheap on
 rollups and noticeable on Ethereum mainnet.
 
 ## Deployment
@@ -162,8 +177,9 @@ One contract, no constructor arguments, deployed through the deterministic
 CREATE2 deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a fixed
 salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
-the address depends on code alone, not comments: v2 (a name written with the record,
-`recordNamed`) is `0x70b35C0FC8885019ff938542CD4E431725874802`.
+the address depends on code alone, not comments: v3 (a required name, records enumerable in
+write order, `genesisPage`) is `0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E`.
+It is not deployed yet.
 
 ```shell
 cd contracts
@@ -174,7 +190,7 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 Anyone can deploy it on a new chain and gets the same contract at the same
 address.
 
-v2 deployments:
+v2 (a name written with the record, `recordNamed`; not enumerable, retired):
 
 | Network | Address | Deployment |
 | --- | --- | --- |

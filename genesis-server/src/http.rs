@@ -250,6 +250,8 @@ struct ImportRequest {
     safe_wallet_props: Option<SafeWalletProps>,
     genesis: Option<Genesis>,
     owner_proof: Option<OwnerProof>,
+    /// The name to record with, when the genesis found has none.
+    name: Option<String>,
 }
 
 async fn import_safe(app: &App, body: Body) -> Response {
@@ -292,6 +294,7 @@ async fn import(app: &App, req: ImportRequest) -> (u16, Value) {
             Err(answer) => return answer,
         }
     };
+    let resolution = resolution.named(req.name);
     let mut task = match import::admit(uuid::Uuid::new_v4().to_string(), safe, source_chain, resolution, proxy_code, crate::now_ms()) {
         Ok(t) => t,
         Err(refusal) => return view::import_refused(safe, &refusal),

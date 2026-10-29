@@ -51,17 +51,18 @@ pragma solidity 0.8.28;
 ///           every chain, so there is nothing to carry across.
 ///         - A record says nothing about a Safe's CURRENT owners: a Safe
 ///           redeployed from its genesis starts with its original owners.
-///         - `totalRecords` and `isRecorded` count any record, including ones
-///           filed at addresses no Safe lives at.
-///         - A NAME, when a record has one, is a label written with the
-///           genesis (`recordNamed`) and never changed. It is not an input to
-///           the address and proves nothing: names may repeat, whoever writes
-///           the record first chooses it. The address is the Safe's identity.
+///         - `totalRecords`, `isRecorded` and the enumeration (`safeAt`,
+///           `genesisPage`) cover any record, including ones filed at
+///           addresses no Safe lives at.
+///         - Every record has a NAME: a label written with the genesis and
+///           never changed. It is not an input to the address and proves
+///           nothing: names may repeat, whoever writes the record first
+///           chooses it. The address is the Safe's identity.
 ///         - The registry makes no external call.
 ///         - EVM CREATE2 only: chains that derive CREATE2 addresses
 ///           differently (zkSync Era) are out of scope.
 contract SafeGenesisRegistry {
-    uint8 public constant VERSION = 2;
+    uint8 public constant VERSION = 3;
 
     /// Upper bound on a stored initializer. A Safe `setup` with dozens of
     /// owners fits in a few KiB. The bound keeps a record writable in one
@@ -92,14 +93,18 @@ contract SafeGenesisRegistry {
         address recorder;
         /// Block number of the write. Informational only.
         uint64 recordedAt;
-        /// A name written with the record (`recordNamed`), or empty. A label:
-        /// not part of the address, never changed, not unique.
+        /// Position in write order, from 0: `safeAt(index)` is this Safe.
+        /// Shares the storage slot of `recorder` and `recordedAt`.
+        uint32 index;
+        /// The name written with the record, 1 to 64 bytes. A label: not part
+        /// of the address, never changed, not unique.
         string name;
     }
 
     mapping(address safe => Genesis) private _genesis;
 
-    uint256 public totalRecords;
+    /// Every recorded Safe, in write order. Append-only.
+    address[] private _safes;
 
     event GenesisRecorded(
         address indexed safe,
@@ -107,10 +112,9 @@ contract SafeGenesisRegistry {
         address indexed singleton,
         uint256 saltNonce,
         bytes32 proxyCreationCodeHash,
-        bytes initializer
+        bytes initializer,
+        string name
     );
-
-    event GenesisNamed(address indexed safe, string name);
 
     error ZeroAddress();
     error EmptyName();
@@ -118,40 +122,23 @@ contract SafeGenesisRegistry {
     error EmptyProxyCreationCode();
     error EmptyInitializer();
     error InitializerTooLong(uint256 length);
+    error IndexOutOfBounds(uint256 index, uint256 total);
+    error RegistryFull();
 
     // -----------------------------------------------------------------------
     // Write
     // -----------------------------------------------------------------------
 
-    /// File the genesis of the Safe these parameters create, under the
-    /// address they create it at. Returns that address; a caller that
-    /// expects a specific Safe compares it. Write-once and idempotent: the
-    /// same parameters again return `created = false`, and no other
-    /// parameters can reach the same address.
+    /// File the genesis of the Safe these parameters create, with a name,
+    /// under the address they create it at. Returns that address; a caller
+    /// that expects a specific Safe compares it. Write-once and idempotent:
+    /// the same parameters again return `created = false` and keep the first
+    /// write's name, and no other parameters can reach the same address.
     ///
     /// `proxyCreationCode` is the factory's `proxyCreationCode()`. It is
     /// hashed, not stored: a wrong one only moves the record to an address
-    /// no Safe lives at.
+    /// no Safe lives at. `name` is not part of the address.
     function record(
-        address factory,
-        bytes calldata proxyCreationCode,
-        address singleton,
-        bytes calldata initializer,
-        uint256 saltNonce
-    ) external returns (address safe, bool created) {
-        if (factory == address(0) || singleton == address(0)) revert ZeroAddress();
-        if (proxyCreationCode.length == 0) revert EmptyProxyCreationCode();
-        if (initializer.length == 0) revert EmptyInitializer();
-        if (initializer.length > MAX_INITIALIZER_LENGTH) revert InitializerTooLong(initializer.length);
-
-        return _record(factory, proxyCreationCode, singleton, initializer, saltNonce);
-    }
-
-    /// `record`, with a name for the Safe written in the same record. The name
-    /// is kept only by the write that creates the record: a Safe recorded
-    /// already keeps the name it has (or none). It is not part of the
-    /// address.
-    function recordNamed(
         address factory,
         bytes calldata proxyCreationCode,
         address singleton,
@@ -159,15 +146,12 @@ contract SafeGenesisRegistry {
         uint256 saltNonce,
         string calldata name
     ) external returns (address safe, bool created) {
-        uint256 length = bytes(name).length;
-        if (length == 0) revert EmptyName();
-        if (length > MAX_NAME_LENGTH) revert NameTooLong(length);
-
-        (safe, created) = _record(factory, proxyCreationCode, singleton, initializer, saltNonce);
-        if (created) {
-            _genesis[safe].name = name;
-            emit GenesisNamed(safe, name);
-        }
+        _check(factory, singleton, proxyCreationCode.length, initializer.length, bytes(name).length);
+        safe = _address(factory, proxyCreationCode, singleton, initializer, saltNonce);
+        if (_genesis[safe].factory != address(0)) return (safe, false);
+        _store(safe, factory, singleton, saltNonce, keccak256(proxyCreationCode));
+        _storeBytes(safe, initializer, name);
+        return (safe, true);
     }
 
     // -----------------------------------------------------------------------
@@ -192,6 +176,52 @@ contract SafeGenesisRegistry {
         return (g.factory, abi.encodeWithSelector(CREATE_PROXY_WITH_NONCE, g.singleton, g.initializer, g.saltNonce));
     }
 
+    // -----------------------------------------------------------------------
+    // Reads — in write order
+    // -----------------------------------------------------------------------
+
+    /// How many records there are; their indexes run from 0 to this minus one.
+    function totalRecords() external view returns (uint256) {
+        return _safes.length;
+    }
+
+    /// The Safe recorded at `index` (0 = the first record).
+    function safeAt(uint256 index) external view returns (address) {
+        uint256 total = _safes.length;
+        if (index >= total) revert IndexOutOfBounds(index, total);
+        return _safes[index];
+    }
+
+    /// Up to `limit` complete records, skipping the first `offset` in the
+    /// chosen order: oldest first, or newest first when `desc`. `safes[i]` is
+    /// the Safe of `records[i]`; `total` is `totalRecords()` at the time of
+    /// the read, so a reader paging newest-first can see that records were
+    /// added since its last page. Past the end, both arrays are empty.
+    ///
+    /// The cost grows with the page and with each record's initializer; a
+    /// reader keeps `limit` within its node's `eth_call` gas cap.
+    function genesisPage(uint256 offset, uint256 limit, bool desc)
+        external
+        view
+        returns (uint256 total, address[] memory safes, Genesis[] memory records)
+    {
+        total = _safes.length;
+        uint256 count = offset < total ? total - offset : 0;
+        if (limit < count) count = limit;
+
+        safes = new address[](count);
+        records = new Genesis[](count);
+        for (uint256 i; i < count; ++i) {
+            address safe = _safes[desc ? total - 1 - offset - i : offset + i];
+            safes[i] = safe;
+            records[i] = _genesis[safe];
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Pure
+    // -----------------------------------------------------------------------
+
     /// The address `createProxyWithNonce(singleton, initializer, saltNonce)`
     /// on `factory` deploys, given that factory's proxy creation code.
     function computeAddress(
@@ -208,33 +238,47 @@ contract SafeGenesisRegistry {
     // Internals
     // -----------------------------------------------------------------------
 
-    function _record(
+    function _check(
         address factory,
-        bytes calldata proxyCreationCode,
         address singleton,
-        bytes calldata initializer,
-        uint256 saltNonce
-    ) private returns (address safe, bool created) {
+        uint256 proxyCreationCodeLength,
+        uint256 initializerLength,
+        uint256 nameLength
+    ) private pure {
         if (factory == address(0) || singleton == address(0)) revert ZeroAddress();
-        if (proxyCreationCode.length == 0) revert EmptyProxyCreationCode();
-        if (initializer.length == 0) revert EmptyInitializer();
-        if (initializer.length > MAX_INITIALIZER_LENGTH) revert InitializerTooLong(initializer.length);
+        if (proxyCreationCodeLength == 0) revert EmptyProxyCreationCode();
+        if (initializerLength == 0) revert EmptyInitializer();
+        if (initializerLength > MAX_INITIALIZER_LENGTH) revert InitializerTooLong(initializerLength);
+        if (nameLength == 0) revert EmptyName();
+        if (nameLength > MAX_NAME_LENGTH) revert NameTooLong(nameLength);
+    }
 
-        safe = _address(factory, proxyCreationCode, singleton, initializer, saltNonce);
-        if (_genesis[safe].factory != address(0)) return (safe, false);
+    function _store(address safe, address factory, address singleton, uint256 saltNonce, bytes32 proxyCreationCodeHash)
+        private
+    {
+        uint256 index = _safes.length;
+        // 2^32 records would take more gas than any chain has produced; the
+        // cast still never truncates silently.
+        if (index > type(uint32).max) revert RegistryFull();
 
-        bytes32 proxyCreationCodeHash = keccak256(proxyCreationCode);
         Genesis storage g = _genesis[safe];
         g.factory = factory;
         g.singleton = singleton;
         g.saltNonce = saltNonce;
-        g.initializer = initializer;
         g.proxyCreationCodeHash = proxyCreationCodeHash;
         g.recorder = msg.sender;
         g.recordedAt = uint64(block.number);
-        ++totalRecords;
-        emit GenesisRecorded(safe, factory, singleton, saltNonce, proxyCreationCodeHash, initializer);
-        return (safe, true);
+        g.index = uint32(index);
+        _safes.push(safe);
+    }
+
+    /// The dynamic fields, and the event: split from `_store` to stay within
+    /// the stack. The fixed fields come back from slots written just now.
+    function _storeBytes(address safe, bytes calldata initializer, string calldata name) private {
+        Genesis storage g = _genesis[safe];
+        g.initializer = initializer;
+        g.name = name;
+        emit GenesisRecorded(safe, g.factory, g.singleton, g.saltNonce, g.proxyCreationCodeHash, initializer, name);
     }
 
     function _address(

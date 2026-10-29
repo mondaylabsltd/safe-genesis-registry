@@ -124,9 +124,12 @@ pub fn admit(
     proxy_creation_code: Bytes,
     now_ms: u64,
 ) -> Result<Task, Refusal> {
-    let Resolution::Found { genesis, source } = resolution else {
+    let Resolution::Found { mut genesis, source } = resolution else {
         return Err(Refusal::Unresolved { resolution: Box::new(resolution) });
     };
+    if genesis.name.is_none() {
+        genesis.name = Some(crate::genesis::default_name(safe));
+    }
     let unrecordable = |detail: &str| Err(Refusal::Unrecordable { detail: detail.to_owned() });
     if genesis.factory.is_zero() || genesis.singleton.is_zero() {
         return unrecordable("zero factory or singleton");
@@ -347,7 +350,7 @@ mod tests {
             singleton: address!("0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"),
             salt_nonce: U256::from(1),
             initializer: Bytes::from_static(&[1, 2, 3]),
-            name: None,
+            name: Some("Team fund".into()),
         }
     }
 
@@ -425,6 +428,17 @@ mod tests {
             admit("t".into(), misnamed.address(&code), 100, found(misnamed), code.clone(), 0),
             Err(Refusal::Unrecordable { .. })
         ));
+        // A genesis resolved from chain history, with no name from the caller
+        // either, gets the default one.
+        let unnamed = Genesis { name: None, ..genesis() };
+        let safe = unnamed.address(&code);
+        let task = admit("t".into(), safe, 100, found(unnamed.clone()), code.clone(), 0).unwrap();
+        assert_eq!(task.genesis.name, Some(crate::genesis::default_name(safe)));
+        let named = found(unnamed).named(Some("Given".into()));
+        assert_eq!(admit("t".into(), safe, 100, named, code.clone(), 0).unwrap().genesis.name.as_deref(), Some("Given"));
+        // A name the genesis has already stays.
+        let kept = found(genesis()).named(Some("Other".into()));
+        assert!(matches!(kept, Resolution::Found { genesis: g, .. } if g.name.as_deref() == Some("Team fund")));
         let safe = big.address(&code);
         assert!(matches!(admit("x".into(), safe, 1, found(big), code.clone(), 0), Err(Refusal::Unrecordable { .. })));
         assert!(matches!(

@@ -12,6 +12,7 @@ alloy::sol! {
             bytes32 proxyCreationCodeHash;
             address recorder;
             uint64 recordedAt;
+            uint32 index;
             string name;
         }
 
@@ -21,19 +22,11 @@ alloy::sol! {
             address indexed singleton,
             uint256 saltNonce,
             bytes32 proxyCreationCodeHash,
-            bytes initializer
+            bytes initializer,
+            string name
         );
 
         function record(
-            address factory,
-            bytes proxyCreationCode,
-            address singleton,
-            bytes initializer,
-            uint256 saltNonce
-        ) external returns (address safe, bool created);
-        event GenesisNamed(address indexed safe, string name);
-
-        function recordNamed(
             address factory,
             bytes proxyCreationCode,
             address singleton,
@@ -45,6 +38,9 @@ alloy::sol! {
         function isRecorded(address safe) external view returns (bool);
         function deployCallOf(address safe) external view returns (address factory, bytes data);
         function totalRecords() external view returns (uint256);
+        function safeAt(uint256 index) external view returns (address);
+        function genesisPage(uint256 offset, uint256 limit, bool desc)
+            external view returns (uint256 total, address[] safes, Genesis[] records);
     }
 
     /// Safe's proxy factory, every version's creation entry points.
