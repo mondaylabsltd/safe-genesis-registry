@@ -161,6 +161,9 @@ an address no Safe lives at.
   - **Ethereum**: the wallet's user writes the record and pays for it,
     typically from the Safe itself, so the record's `recorder` is the Safe and
     its name is the Safe's own.
+  - **The service** reads Gnosis only (lookups, and the writes it sponsors
+    there). Wallets read the Ethereum registry and every other chain
+    themselves.
 - **Creating a Safe:** `record` its genesis. Deploying is not needed: the
   address is fixed on every chain from that moment, and the first transaction
   on a chain can deploy it from `deployCallOf`. The service records a Safe

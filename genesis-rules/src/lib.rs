@@ -56,10 +56,13 @@ pub mod view;
 
 pub use alloy::primitives::{Address, B256, Bytes, U256};
 
-/// The chains a deployment serves unless it configures its own: an EVM
-/// CREATE2 rule, the canonical Safe deployments, a Safe transaction service.
-/// `[{"chainId", "name", "rpcs": [..], "txService"}]`; shells parse it into
-/// their own config type.
+/// The chains a deployment serves unless it configures its own: Gnosis only,
+/// the service's scope — its registry's lookups and the writes it sponsors.
+/// Wallets read the Ethereum registry and every other chain themselves.
+/// `data/chains.all.json` holds more chains (with RPCs and transaction
+/// services) to copy into `CHAINS` when a deployment wants them.
+/// `[{"chainId", "name", "rpcs": [..], "txService", "registry"}]`; shells
+/// parse it into their own config type.
 pub const DEFAULT_CHAINS_JSON: &str = include_str!("../data/chains.json");
 
 /// An Alchemy endpoint for `chain_id`, for a deployment with an

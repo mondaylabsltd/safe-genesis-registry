@@ -12,7 +12,8 @@
 #
 # Optional vars: HOME_CHAIN_ID (default 100, Gnosis), MAX_FEE_WEI,
 # MIN_SPONSOR_BALANCE_WEI, CHAINS (a JSON array replacing the built-in chain
-# table, genesis-rules/data/chains.json).
+# table, genesis-rules/data/chains.json: Gnosis only; more chains ready to
+# copy in genesis-rules/data/chains.all.json), ALCHEMY_API_KEY (secret).
 # Local development: copy .dev.vars.example to .dev.vars, then `npx wrangler dev`.
 #
 # Served on a custom domain (routes, below), not only on *.workers.dev: the

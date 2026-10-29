@@ -68,6 +68,7 @@ safe         = address(keccak256(0xff ‖ factory ‖ salt ‖ initCodeHash)[12:
 - **记录存在哪里：** registry 只部署在 **Gnosis** 和 **Ethereum** 上，不是 Safe 用到的每条链都部署；其他链上的 Safe 从这两条链之一的记录重放部署（见"扩展到新链"）。
   - **Gnosis**：由服务代付写入。
   - **Ethereum**：由钱包用户自己写入并付费，通常由 Safe 自己发交易，所以记录的 `recorder` 就是这个 Safe，名字也就是 Safe 自己定的。
+  - **服务**只读 Gnosis（查询，以及它在 Gnosis 上代付的写入）。Ethereum 上的 registry 和其他链由钱包自己读。
 - **创建 Safe：** `record` 它的 genesis 即可，不需要部署。从这一刻起它在每条链上的地址都确定了，某条链上的第一笔交易可以用 `deployCallOf` 顺带部署它。还没在任何链上部署的 Safe，只要一个 owner 用 passkey 发起请求（`ownerProof`，见 [API](genesis-cf/README.md)），服务就会在 Gnosis 上代付写入。
 - **改名：** 由用户自己发起、自己付费，服务从不代付（服务只在 Gnosis 上代付 `record`）。Safe 在 registry 所在的链上调用 `rename`，所以它必须先部署在那条链上：需要时由钱包用 `deployCallOf` 部署（在 Gnosis 上花费不到一美分），再像普通交易一样发送 owners 批准的 Safe 交易 `{to: registry, data: rename(name)}`，自己付 gas。Gnosis 上的副本一开始是初始 owners；在其他链上已被移除的 owner 在同步之前仍在这里有一票，所以依赖它的名字之前先同步 owners。
 - **别处创建的 Safe**（比如 Safe{Wallet}）：只需从创建交易或交易服务里取一次创建参数，然后 `record`。之后谁都不再需要那个来源。如果 `record` 返回的地址和这个 Safe 不一致，说明参数错了。
