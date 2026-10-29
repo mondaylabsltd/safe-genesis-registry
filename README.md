@@ -12,10 +12,11 @@ Wallet; Vela is its first client, not its owner.
 
 | Path | What |
 | --- | --- |
-| [`contracts/`](contracts) | The registry contract, its tests (unit, real-Safe fixtures, forks) and the deterministic deployment script — Foundry |
+| [`contracts/`](contracts) | The registry contract, its tests (unit, real-Safe fixtures, forks, end-to-end on a local chain and on a deployed one) and the deterministic deployment script — Foundry |
 | [`genesis-rules/`](genesis-rules) | Every rule the service applies, I/O-free Rust: address derivation, genesis resolution, setup defects, the replay check, member drift, the import lifecycle |
 | [`genesis-cf/`](genesis-cf) | The service on Cloudflare Workers: lookups across chains, per-chain status, replay checks, sponsored imports, cache, alerts ([API](genesis-cf/README.md)) |
 | [`genesis-server/`](genesis-server) | The same service as one container (Axum, SQLite, in-memory cache): `docker compose up -d` |
+| [`explorer/`](explorer) | A static page that lists the registry straight from the chain |
 | [`verify/`](verify) | Scripts that build the real-Safe fixtures and the known-contracts table from public data |
 
 ## The problem
@@ -223,6 +224,14 @@ forge test --mt Fork -vv                      # real Safe v1.3.0 / v1.4.1 on for
 e2e/local.sh                                  # deploy on anvil, write, read back (add FORK_RPC_GNOSIS for real Safe v1.4.1)
 ```
 
+On a deployed registry (Arc Testnet holds a seeded set):
+
+```shell
+RPC=https://rpc.testnet.arc.network contracts/e2e/onchain.sh                  # read-only checks
+RPC=... PRIVATE_KEY=0x... contracts/e2e/onchain.sh                            # + write, revert, replay a real Safe v1.4.1
+RPC=... PRIVATE_KEY=0x... contracts/e2e/seed.sh                               # + 30 varied records (permanent)
+```
+
 `e2e/local.sh` deploys the registry as production does (deterministic
 deployer, the production salt) on a fresh anvil and checks it with real
 transactions: events, the raw storage layout, write-once behaviour, every
@@ -237,6 +246,21 @@ revert it did not predict from the setup; after each replay it checks owners,
 threshold, fallback handler and guard. The contract and the service were
 reviewed adversarially (2026-10-27); the findings and what changed are in
 [docs/review-2026-10-27.md](docs/review-2026-10-27.md).
+
+## Explorer
+
+[`explorer/index.html`](explorer/index.html) is a static page that lists the
+registry straight from the chain: `genesisPage` for each page, newest or
+oldest first, 20/50/100 per page, lookup by address, and per record the
+decoded owners and threshold, Safe version, factory, salt nonce, recorder,
+whether the Safe is deployed on that chain, and its deploy call. Names are
+read as bytes and shown as text only, so a name that is not UTF-8 or that
+carries markup is displayed, never interpreted.
+
+```shell
+python3 -m http.server -d explorer 8765   # then open http://127.0.0.1:8765/
+# another chain or registry: ?rpc=https://…&registry=0x…&explorer=https://…
+```
 
 ## License
 
