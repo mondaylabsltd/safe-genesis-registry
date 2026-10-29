@@ -562,10 +562,12 @@ impl Edge {
         ));
         let request = Request::new_with_init(&format!("https://do{path}"), &init)?;
         let mut r = self.submitter()?.fetch_with_request(request).await?;
-        if r.status_code() >= 400 {
-            return Err(worker::Error::RustError("durable object error".into()));
+        let status = r.status_code();
+        let text = r.text().await?;
+        if status >= 400 {
+            return Err(worker::Error::RustError(format!("submitter {path}: {status} {text}")));
         }
-        r.json().await
+        serde_json::from_str(&text).map_err(|e| worker::Error::RustError(format!("submitter {path}: {e}: {text}")))
     }
 }
 

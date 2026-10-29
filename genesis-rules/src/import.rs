@@ -343,8 +343,11 @@ pub fn evidence_of(task: &Task) -> Evidence {
 /// What queueing a sponsored task came to. The budget is checked again in the
 /// same step that queues (the store's lock, the Durable Object's request), so
 /// concurrent imports cannot spend past it.
+/// Externally tagged on the wire (`{"queued": {"task": …}}`): an internally
+/// tagged enum is deserialized through serde's buffer, which has no u128, and
+/// a task that was broadcast carries u128 fees.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Enqueued {
     /// Queued, or the Safe's active task already was.
     Queued { task: Box<Task> },
@@ -414,6 +417,17 @@ mod tests {
         let o = Observation { recorded: true, ..Default::default() };
         assert_eq!(next(&task(), o, 0), Action::MarkDone);
         assert_eq!(next(&sent(0, 0), o, 0), Action::MarkDone);
+    }
+
+    /// The Durable Object hands an Enqueued to the edge as JSON; a task that
+    /// was broadcast (u128 fees) must survive the trip.
+    #[test]
+    fn an_enqueued_broadcast_task_round_trips_through_json() {
+        let e = Enqueued::Queued { task: Box::new(sent(0, 5)) };
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<Enqueued>(&json).unwrap(), e);
+        let n = Enqueued::NotSponsored { sponsorship: Sponsorship::CallerPays { reason: "spent".into() } };
+        assert_eq!(serde_json::from_str::<Enqueued>(&serde_json::to_string(&n).unwrap()).unwrap(), n);
     }
 
     #[test]

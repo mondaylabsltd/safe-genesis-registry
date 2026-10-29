@@ -34,7 +34,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             // A path parameter that is not an address is the caller's error;
             // anything else is ours.
             Some(Err(e)) if e.to_string().contains("not an address") => error_response(400, "not an address")?,
-            Some(Err(_)) => error_response(500, "internal error")?,
+            Some(Err(e)) => {
+                // Ours: said in the log (wrangler tail, Workers Logs), never to the client.
+                worker::console_error!("internal error: {e}");
+                error_response(500, "internal error")?
+            }
         },
         Err(e) => error_response(500, &format!("service misconfigured: {e}"))?,
     };
