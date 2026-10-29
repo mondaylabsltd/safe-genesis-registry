@@ -9,6 +9,8 @@ mod signer;
 mod store;
 mod submit;
 mod submitter;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

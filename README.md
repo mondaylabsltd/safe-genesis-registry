@@ -250,6 +250,8 @@ Every chain gets this same address; deploy it anywhere else with `script/Deploy.
 
 ```shell
 cargo test                                    # genesis-rules, against the same real-Safe fixtures
+cargo test -p genesis-server                  # the service over HTTP against a mock chain: 404 vs 502, pages, cache, limits, health, failover, budget
+scripts/smoke.sh http://127.0.0.1:8080 100    # either running shell (or a deployment), read-only: the same checks for both
 cd contracts
 forge build
 forge test                                    # unit tests, no network
