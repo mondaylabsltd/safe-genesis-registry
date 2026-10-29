@@ -324,6 +324,117 @@ contract SafeGenesisRegistryTest is Test {
         assertEq(g.name, name);
     }
 
+    // -- rename ---------------------------------------------------------------------
+
+    function test_Rename_TheSafeRenamesItself() public {
+        (address safe,) = _recordNamed(7, "Squatted");
+        vm.roll(500);
+        vm.expectEmit(true, false, false, true, address(registry));
+        emit SafeGenesisRegistry.GenesisRenamed(safe, "Family vault");
+        vm.prank(safe);
+        registry.rename("Family vault");
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "Family vault");
+        assertEq(g.renamedAt, 500);
+        (,, SafeGenesisRegistry.Genesis[] memory page) = registry.genesisPage(0, 1, true);
+        assertEq(page[0].name, "Family vault");
+        assertEq(page[0].renamedAt, 500);
+    }
+
+    /// A rename moves the label only: the genesis, the replay and the
+    /// record's place stay as they were.
+    function test_Rename_ChangesOnlyTheName() public {
+        vm.prank(dave);
+        (address safe,) = _recordNamed(7, "First");
+        (, SafeGenesisRegistry.Genesis memory before) = registry.genesisOf(safe);
+        (address toBefore, bytes memory dataBefore) = registry.deployCallOf(safe);
+        vm.roll(block.number + 10);
+        vm.prank(safe);
+        registry.rename("Second");
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        before.name = "Second";
+        before.renamedAt = uint64(block.number);
+        assertEq(abi.encode(g), abi.encode(before));
+        (address to, bytes memory data) = registry.deployCallOf(safe);
+        assertEq(to, toBefore);
+        assertEq(data, dataBefore);
+        assertEq(registry.totalRecords(), 1);
+        assertEq(_replay(safe), safe);
+    }
+
+    function test_Rename_AnyNumberOfTimes() public {
+        (address safe,) = _recordNamed(7, "One");
+        vm.startPrank(safe);
+        registry.rename("Two");
+        registry.rename("Three");
+        vm.stopPrank();
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "Three");
+    }
+
+    /// Only the Safe: the recorder, an owner or anyone else renames nothing,
+    /// because their own address holds no record.
+    function test_Rename_OnlyTheSafe() public {
+        vm.prank(dave);
+        (address safe,) = _recordNamed(7, "Kept");
+        address[3] memory others = [dave, alice, address(this)];
+        for (uint256 i; i < 3; ++i) {
+            vm.prank(others[i]);
+            vm.expectRevert(abi.encodeWithSelector(SafeGenesisRegistry.NotRecorded.selector, others[i]));
+            registry.rename("Taken");
+        }
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "Kept");
+        assertEq(g.renamedAt, 0);
+    }
+
+    function test_Rename_RevertsOnEmptyOrLongNames() public {
+        (address safe,) = _recordNamed(7, "Kept");
+        vm.startPrank(safe);
+        vm.expectRevert(SafeGenesisRegistry.EmptyName.selector);
+        registry.rename("");
+        vm.expectRevert(abi.encodeWithSelector(SafeGenesisRegistry.NameTooLong.selector, 65));
+        registry.rename(string(new bytes(65)));
+        registry.rename(string(new bytes(64)));
+        vm.stopPrank();
+    }
+
+    /// A repeat write after a rename keeps the Safe's own name.
+    function test_Rename_ARepeatWriteKeepsTheSafesName() public {
+        (address safe,) = _recordNamed(7, "Squatted");
+        vm.prank(safe);
+        registry.rename("Mine");
+        (, bool created) = _recordNamed(7, "Squatted again");
+        assertFalse(created);
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "Mine");
+    }
+
+    /// The deployed Safe renames itself through its own call.
+    function test_Rename_FromTheDeployedSafe() public {
+        (address safe,) = _recordNamed(7, "Squatted");
+        _replay(safe);
+        MockSafeSingleton(safe).call(address(registry), abi.encodeCall(SafeGenesisRegistry.rename, ("From the Safe")));
+        (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safe);
+        assertEq(g.name, "From the Safe");
+    }
+
+    function testFuzz_Rename_KeepsEnumerationIntact(uint8 n, uint8 who, string calldata name) public {
+        vm.assume(bytes(name).length > 0 && bytes(name).length <= 64);
+        n = uint8(bound(n, 1, 12));
+        address[] memory safes = _recordMany(n);
+        uint256 i = bound(who, 0, n - 1);
+        vm.prank(safes[i]);
+        registry.rename(name);
+        for (uint256 k; k < n; ++k) {
+            assertEq(registry.safeAt(k), safes[k]);
+            (, SafeGenesisRegistry.Genesis memory g) = registry.genesisOf(safes[k]);
+            assertEq(g.index, k);
+            if (k == i) assertEq(g.name, name);
+            else assertEq(g.renamedAt, 0);
+        }
+    }
+
     // -- enumeration ------------------------------------------------------------
 
     /// `n` Safes, recorded with salt nonces 0..n-1; the even ones named.

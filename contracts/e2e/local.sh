@@ -5,7 +5,8 @@
 # salt in script/Deploy.s.sol) on a fresh anvil, sends real transactions and
 # reads the state back: events, raw storage layout, write-once behaviour,
 # every revert with its arguments, name edge cases, pagination against
-# safeAt, the eth_call cost of pages, and a replay from deployCallOf.
+# safeAt, the eth_call cost of pages, a replay from deployCallOf, and renames
+# (only by the Safe; on the fork, a real Safe through execTransaction).
 #
 #   contracts/e2e/local.sh                                      # local chain only
 #   FORK_RPC_GNOSIS=https://rpc.gnosischain.com contracts/e2e/local.sh   # + real Safe v1.4.1 on a fork
@@ -54,12 +55,12 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL  $*"; }
 eq()  { if [ "$(echo "$2" | tr A-F a-f)" == "$(echo "$3" | tr A-F a-f)" ]; then ok "$1"; else bad "$1: got [$2] want [$3]"; fi; }
 
 eq "runtime code == this build" "$(cast code $R --rpc-url $RPC)" "$(forge inspect SafeGenesisRegistry deployedBytecode)"
-eq "VERSION" "$(cast call $R 'VERSION()(uint8)' --rpc-url $RPC)" 3
+eq "VERSION" "$(cast call $R 'VERSION()(uint8)' --rpc-url $RPC)" "$(grep -oE 'VERSION = [0-9]+' src/SafeGenesisRegistry.sol | grep -oE '[0-9]+')"
 eq "starts empty" "$(cast call $R 'totalRecords()(uint256)' --rpc-url $RPC)" 0
 F=$(forge create test/fixtures/SafeLike.sol:SafeLikeProxyFactory --rpc-url $RPC --private-key $K0 --broadcast 2>&1 | grep "Deployed to" | awk '{print $3}')
 S=$(forge create test/fixtures/SafeLike.sol:MockSafeSingleton --rpc-url $RPC --private-key $K0 --broadcast 2>&1 | grep "Deployed to" | awk '{print $3}')
 
-GT='(address,address,uint256,bytes,bytes32,address,uint64,uint32,string)'
+GT='(address,address,uint64,uint256,bytes,bytes32,address,uint64,uint32,string)'
 SIG_RECORD='record(address,bytes,address,bytes,uint256,string)'
 CODE=$(cast call $F 'proxyCreationCode()(bytes)' --rpc-url $RPC)
 init() { cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "[$1]" "$2" 0x0000000000000000000000000000000000000000 0x 0x0000000000000000000000000000000000000000 0x0000000000000000000000000000000000000000 0 0x0000000000000000000000000000000000000000; }
@@ -74,6 +75,15 @@ revert_of() {
   cast rpc eth_call "{\"to\":\"$R\",\"data\":\"$cd\"}" latest --rpc-url $RPC 2>&1 | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*"?' | tail -1 | tr -d '"'
 }
 err() { cast calldata "$@"; }
+view_revert_from() { cast rpc eth_call "{\"from\":\"$1\",\"to\":\"$R\",\"data\":\"$2\"}" latest --rpc-url $RPC 2>&1 | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*"?' | tail -1 | tr -d '"'; }
+# A Safe's own call: execTransaction by an owner of a 1-threshold Safe, with
+# the owner's pre-validated signature (r = owner, s = 0, v = 1).
+safe_exec() { # rpc safe to data key
+  local owner sig; owner=$(cast wallet address "$5")
+  sig=0x$(cast abi-encode 'f(address,uint256)' $owner 0 | cut -c3-)01
+  cast send "$2" 'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)' \
+    "$3" 0 "$4" 0 0 0 0 $Z $Z $sig --private-key "$5" --rpc-url "$1" --json
+}
 view_revert() { cast rpc eth_call "{\"to\":\"$R\",\"data\":\"$1\"}" latest --rpc-url $RPC 2>&1 | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*"?' | tail -1 | tr -d '"'; }
 
 echo "== 1. first write, named, from account 1"
@@ -114,6 +124,9 @@ echo "== 3. raw storage: slot packing and the array"
 BASE=$(cast index address $SAFE 0)
 slotp() { cast storage $R "$(python3 -c "print(hex(int('$1',16)+$2))")" --rpc-url $RPC; }
 eq "slot+0 factory" "$(slotp $BASE 0)" "$(cast abi-encode 'f(address)' $F)"
+P1=$(slotp $BASE 1)
+eq "slot+1 singleton (low 20 bytes)" "0x${P1:26:40}" "$S"
+eq "slot+1 renamedAt (next 8) = 0" "$(cast to-dec 0x${P1:10:16})" 0
 eq "slot+2 saltNonce" "$(cast to-dec $(slotp $BASE 2))" 7
 P=$(slotp $BASE 5)
 echo "  slot+5 = $P   (index | recordedAt | recorder, high to low)"
@@ -184,7 +197,7 @@ eq "total = 1 + 3 edge + 30" "$TOTAL" 34
 MISMATCH=0
 for i in $(seq 0 $((TOTAL-1))); do
   A=$(cast call $R 'safeAt(uint256)(address)' $i --rpc-url $RPC)
-  IDX=$(cast abi-decode --input "f(bool,$GT)" "$(cast call $R 'genesisOf(address)' $A --rpc-url $RPC)" | sed -n 2p | python3 -c "import sys,re; t=sys.stdin.read(); print(re.findall(r'\d+', t.split(',')[7])[0])")
+  IDX=$(cast abi-decode --input "f(bool,$GT)" "$(cast call $R 'genesisOf(address)' $A --rpc-url $RPC)" | sed -n 2p | python3 -c "import sys,re; t=sys.stdin.read(); print(re.findall(r'\d+', t.split(',')[8])[0])")
   [ "$IDX" == "$i" ] || { MISMATCH=$((MISMATCH+1)); echo "    index $i: record says $IDX"; }
 done
 eq "genesisOf(safeAt(i)).index == i for all $TOTAL" "$MISMATCH" 0
@@ -227,6 +240,37 @@ cast send $TO "$DATA_" --private-key $K0 --rpc-url $RPC >/dev/null
 [ "$(cast code $SAFE --rpc-url $RPC)" != 0x ] && ok "Safe deployed at the recorded address" || bad "no code at $SAFE"
 eq "deployed Safe's owners" "$(cast call $SAFE 'getOwners()(address[])' --rpc-url $RPC)" "[$A0, $A1, $A2]"
 eq "deployed Safe's threshold" "$(cast call $SAFE 'getThreshold()(uint256)' --rpc-url $RPC)" 2
+
+echo "== 9b. rename: only the Safe itself, only the name"
+G_BEFORE=$(cast call $R 'genesisOf(address)' $SAFE --rpc-url $RPC)
+eq "a stranger: NotRecorded(stranger)" "$(view_revert_from $A2 "$(cast calldata 'rename(string)' Mine)")" "$(err 'NotRecorded(address)' $A2)"
+eq "the recorder: NotRecorded(recorder)" "$(view_revert_from $A1 "$(cast calldata 'rename(string)' Mine)")" "$(err 'NotRecorded(address)' $A1)"
+cast rpc anvil_impersonateAccount $SAFE --rpc-url $RPC >/dev/null
+cast rpc anvil_setBalance $SAFE 0xde0b6b3a7640000 --rpc-url $RPC >/dev/null
+eq "the Safe, empty name: EmptyName" "$(view_revert_from $SAFE "$(cast calldata 'rename(string)' '')")" "$(err 'EmptyName()')"
+RN=$(cast send $R 'rename(string)' "Family vault" --from $SAFE --unlocked --rpc-url $RPC --json)
+RN_BLOCK=$(cast to-dec "$(echo "$RN" | jq -r .blockNumber)")
+eq "the Safe renames itself" "$(echo "$RN" | jq -r .status)" 0x1
+echo "  gas used (rename): $(cast to-dec "$(echo "$RN" | jq -r .gasUsed)")"
+eq "GenesisRenamed topics" "$(echo "$RN" | jq -r '.logs[0].topics | join(" ")')" "$(cast keccak 'GenesisRenamed(address,string)') $(cast abi-encode 'f(address)' $SAFE)"
+eq "GenesisRenamed data" "$(echo "$RN" | jq -r '.logs[0].data')" "$(cast abi-encode 'f(string)' 'Family vault')"
+FIELDS=$(cast call $R "genesisOf(address)(bool,$GT)" $SAFE --rpc-url $RPC --json | jq -c '.[1]')
+eq "name is the Safe's" "$(echo "$FIELDS" | jq -r '.[9]')" "Family vault"
+eq "renamedAt = the rename's block" "$(echo "$FIELDS" | jq -r '.[2]')" "$RN_BLOCK"
+P1=$(slotp $BASE 1)
+eq "slot+1 renamedAt packed beside singleton" "$(cast to-dec 0x${P1:10:16})" "$RN_BLOCK"
+eq "slot+1 singleton untouched" "0x${P1:26:40}" "$S"
+# every other field is as it was: re-encode the old record with the new name and block
+BEFORE_JSON=$(cast abi-decode --input "f(bool,$GT)" "$G_BEFORE" --json | jq -c '.[1]')
+eq "only name and renamedAt changed" "$(echo "$BEFORE_JSON" | jq -c --arg b "$RN_BLOCK" '.[2] = ($b|tonumber) | .[9] = "Family vault"')" "$(echo "$FIELDS" | jq -c '.[2] |= tonumber')"
+eq "total unchanged" "$(cast call $R 'totalRecords()(uint256)' --rpc-url $RPC)" 34
+cast send $R 'rename(string)' "Renamed twice" --from $SAFE --unlocked --rpc-url $RPC >/dev/null
+eq "renames again" "$(cast call $R "genesisOf(address)(bool,$GT)" $SAFE --rpc-url $RPC --json | jq -r '.[1][9]')" "Renamed twice"
+cast rpc anvil_stopImpersonatingAccount $SAFE --rpc-url $RPC >/dev/null
+send "$INIT" 7 "Squat again" $K2 >/dev/null
+eq "a repeat write keeps the Safe's name" "$(cast call $R "genesisOf(address)(bool,$GT)" $SAFE --rpc-url $RPC --json | jq -r '.[1][9]')" "Renamed twice"
+eq "the page shows the Safe's name" "$(cast call $R "genesisPage(uint256,uint256,bool)(uint256,address[],$GT[])" 33 1 true --rpc-url $RPC --json | jq -r '.[2][0][9]')" "Renamed twice"
+
 eq "deployCallOf(unrecorded) empty" "$(cast call $R 'deployCallOf(address)(address,bytes)' 0x000000000000000000000000000000000000dEaD --rpc-url $RPC | tr '\n' ' ')" "0x0000000000000000000000000000000000000000 0x "
 eq "genesisOf(unrecorded).found" "$(cast call $R "genesisOf(address)(bool,$GT)" 0x000000000000000000000000000000000000dEaD --rpc-url $RPC | head -1)" false
 
@@ -240,7 +284,7 @@ if [ -n "${FORK_RPC_GNOSIS:-}" ]; then
   FH=0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99     # CompatibilityFallbackHandler 1.4.1
   eq "same registry address on the fork" "$(deploy_registry $FRPC)" "$R"
   O1=0x1111111111111111111111111111111111111111; O2=0x2222222222222222222222222222222222222222
-  RINIT=$(cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "[$O1,$O2,$A1]" 2 $Z 0x $FH $Z 0 $Z)
+  RINIT=$(cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "[$O1,$O2,$A1]" 1 $Z 0x $FH $Z 0 $Z)
   RCODE=$(cast call $FACT 'proxyCreationCode()(bytes)' --rpc-url $FRPC)
   RNONCE=$(cast keccak "safe-genesis-registry/e2e")
   RSAFE=$(cast call $R 'computeAddress(address,bytes,address,bytes,uint256)(address)' $FACT $RCODE $SING $RINIT $RNONCE --rpc-url $FRPC)
@@ -252,9 +296,13 @@ if [ -n "${FORK_RPC_GNOSIS:-}" ]; then
   eq "replay" "$(cast send $RTO $RDATA --private-key $K0 --rpc-url $FRPC --json | jq -r .status)" 0x1
   eq "replayed VERSION" "$(cast call $RSAFE 'VERSION()(string)' --rpc-url $FRPC)" '"1.4.1"'
   eq "replayed owners" "$(cast call $RSAFE 'getOwners()(address[])' --rpc-url $FRPC)" "[$O1, $O2, $A1]"
-  eq "replayed threshold" "$(cast call $RSAFE 'getThreshold()(uint256)' --rpc-url $FRPC)" 2
+  eq "replayed threshold" "$(cast call $RSAFE 'getThreshold()(uint256)' --rpc-url $FRPC)" 1
   eq "replayed fallback handler" "$(cast storage $RSAFE 0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5 --rpc-url $FRPC)" "$(cast abi-encode 'f(address)' $FH)"
   eq "replayed singleton" "$(cast storage $RSAFE 0 --rpc-url $FRPC)" "$(cast abi-encode 'f(address)' $SING)"
+  RX=$(safe_exec $FRPC $RSAFE $R "$(cast calldata 'rename(string)' 'Renamed by its owners')" $K1)
+  eq "the real Safe renames itself (execTransaction)" "$(echo "$RX" | jq -r .status)" 0x1
+  eq "its name is now its own" "$(cast call $R "genesisOf(address)(bool,$GT)" $RSAFE --rpc-url $FRPC --json | jq -r '.[1][9]')" "Renamed by its owners"
+  eq "renamedAt = that block" "$(cast call $R "genesisOf(address)(bool,$GT)" $RSAFE --rpc-url $FRPC --json | jq -r '.[1][2]')" "$(cast to-dec "$(echo "$RX" | jq -r .blockNumber)")"
 else
   echo "== 10. (skipped: set FORK_RPC_GNOSIS for the real Safe v1.4.1 fork check)"
 fi

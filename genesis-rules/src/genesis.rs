@@ -79,6 +79,9 @@ pub struct Recorded {
     /// Position in this registry's write order (`safeAt(index)`). Each chain's
     /// registry counts its own records, so it differs between chains.
     pub index: u32,
+    /// Block of the Safe's last `rename` on this chain, 0 if never: then the
+    /// name is the first writer's, else the Safe's own.
+    pub renamed_at: u64,
 }
 
 impl Recorded {
@@ -189,5 +192,6 @@ fn from_abi(g: ISafeGenesisRegistry::Genesis) -> Recorded {
         recorder: g.recorder,
         recorded_at: g.recordedAt,
         index: g.index,
+        renamed_at: g.renamedAt,
     }
 }

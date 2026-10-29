@@ -112,6 +112,17 @@ contract MockSafeSingleton {
         owners[position] = newOwner;
     }
 
+    /// The Safe making a call of its own, as `execTransaction` does once its
+    /// owners approve (here: no signatures, the mock trusts any caller).
+    function call(address to, bytes calldata data) external {
+        (bool ok, bytes memory ret) = to.call(data);
+        if (!ok) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+    }
+
     function getOwners() external view returns (address[] memory) {
         return owners;
     }

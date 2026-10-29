@@ -16,7 +16,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 : "${RPC:?set RPC}" "${PRIVATE_KEY:?set PRIVATE_KEY}"
-R=${REGISTRY:-0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E}
+R=${REGISTRY:-0xF412388bF908E510066d3Be5c704bd9A327f945d}
 Z=0x0000000000000000000000000000000000000000
 SIG_RECORD='record(address,bytes,address,bytes,uint256,string)'
 RUN=$(date -u +%Y%m%dT%H%M%SZ)

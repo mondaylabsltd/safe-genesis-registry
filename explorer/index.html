@@ -95,8 +95,9 @@
   <p class="lede">
     Each Safe's creation parameters, written once and kept on chain, so the same Safe can be deployed at the same
     address on any other chain. This page reads the <a id="contract-link" target="_blank" rel="noopener">registry contract</a>
-    directly from your browser; nothing comes from a server. A name is a label chosen by whoever wrote the record first:
-    it is not verified and names may repeat. The address is the Safe's identity.
+    directly from your browser; nothing comes from a server. A name is a label: whoever writes the record first chooses
+    it, and the Safe itself can rename it at any time, so only a name marked “named by the Safe” comes from its owners.
+    Names may repeat; the address is the Safe's identity.
   </p>
 
   <div class="stat"><span class="dot off" id="dot"></span><span class="count" id="total">–</span><span>Safes recorded on <span id="chain-name">…</span></span></div>
@@ -143,7 +144,7 @@ import { createPublicClient, http, decodeFunctionData, getAddress, isAddress, fo
 const params = new URLSearchParams(location.search);
 const CONFIG = {
   rpc: params.get("rpc") || "https://rpc.testnet.arc.network",
-  registry: params.get("registry") || "0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E",
+  registry: params.get("registry") || "0xF412388bF908E510066d3Be5c704bd9A327f945d",
   explorer: (params.get("explorer") || "https://explorer.testnet.arc.io").replace(/\/$/, ""),
 };
 const CHAIN_NAMES = { 1: "Ethereum", 10: "Optimism", 100: "Gnosis", 137: "Polygon", 8453: "Base", 42161: "Arbitrum One", 5042002: "Arc Testnet", 11155111: "Sepolia" };
@@ -151,7 +152,7 @@ const CHAIN_NAMES = { 1: "Ethereum", 10: "Optimism", 100: "Gnosis", 137: "Polygo
 // The name is read as `bytes` (the same ABI encoding as `string`), so that a
 // name which is not UTF-8 can be shown for what it is instead of guessed at.
 const GENESIS = { type: "tuple", components: [
-  { name: "factory", type: "address" }, { name: "singleton", type: "address" }, { name: "saltNonce", type: "uint256" },
+  { name: "factory", type: "address" }, { name: "singleton", type: "address" }, { name: "renamedAt", type: "uint64" }, { name: "saltNonce", type: "uint256" },
   { name: "initializer", type: "bytes" }, { name: "proxyCreationCodeHash", type: "bytes32" }, { name: "recorder", type: "address" },
   { name: "recordedAt", type: "uint64" }, { name: "index", type: "uint32" }, { name: "name", type: "bytes" },
 ]};
@@ -257,6 +258,7 @@ function renderEntry(e, open = false) {
     setup ? el("span", { class: "badge b-muted" }, `${setup.threshold} of ${setup.owners.length}`) : el("span", { class: "badge b-warn" }, "not a Safe setup"),
     e.deployed === true ? el("span", { class: "badge b-ok" }, "deployed here") : e.deployed === false ? el("span", { class: "badge b-muted" }, "not deployed here") : null,
     name.valid ? null : el("span", { class: "badge b-warn", title: "The name's bytes are not valid UTF-8" }, "not UTF-8"),
+    g.renamedAt > 0n ? el("span", { class: "badge b-ok", title: "The Safe set this name itself, by its owners' transaction" }, "named by the Safe") : null,
   );
   const li = el("li", { class: open ? "open" : "" });
   const row = el("button", { class: "row", type: "button", "aria-expanded": String(open), onclick: () => {
@@ -270,7 +272,11 @@ function renderEntry(e, open = false) {
 
   const rows = [
     ["Safe", el("span", {}, el("a", { href: addrUrl(e.safe), target: "_blank", rel: "noopener", class: "mono val" }, e.safe), " ↗", copyButton(e.safe))],
-    ["Name", el("span", {}, name.text, name.valid ? null : el("div", { class: "mono", style: "color:var(--muted)" }, `raw bytes ${name.hex}`))],
+    ["Name", el("span", {}, name.text,
+      name.valid ? null : el("div", { class: "mono", style: "color:var(--muted)" }, `raw bytes ${name.hex}`),
+      el("div", { style: "color:var(--muted);font-size:13px" }, g.renamedAt > 0n
+        ? ["set by the Safe itself, ", el("a", { href: blockUrl(g.renamedAt), target: "_blank", rel: "noopener" }, `block ${g.renamedAt}`)]
+        : ["set by the first writer ", addrLink(g.recorder, short(g.recorder)), " — not verified"]))],
     ["Index", el("span", { class: "mono" }, `${g.index}  (safeAt(${g.index}))`)],
     ["Version", el("span", {}, version || "unknown singleton", el("span", { class: "mono", style: "color:var(--muted);margin-left:8px" }, g.singleton))],
   ];

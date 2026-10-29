@@ -39,6 +39,7 @@ This contract keeps them, keyed by the Safe's address, readable with one
 // Write: the registry computes the Safe's address itself; the caller never supplies it
 record(address factory, bytes proxyCreationCode, address singleton, bytes initializer, uint256 saltNonce, string name)
     returns (address safe, bool created)                            // name: required, 1 to 64 bytes, not part of the address
+rename(string name)                                                 // called by the Safe itself: replaces its name
 
 // Read: by the Safe's own address
 genesisOf(address safe)    returns (bool found, Genesis genesis)
@@ -56,7 +57,16 @@ genesisPage(uint256 offset, uint256 limit, bool desc)               // desc = ne
 A `Genesis` holds `factory`, `singleton`, `saltNonce`, `initializer` (the
 `setup(...)` call: original owners, threshold, fallback handler, setup hook),
 `proxyCreationCodeHash`, informational `recorder` / `recordedAt`, its `index`
-in this registry's write order, and the `name` it was written with.
+in this registry's write order, its `name`, and `renamedAt`.
+
+**Names.** Whoever writes a record first chooses its name, so a name on its
+own proves nothing: anyone can record a Safe whose parameters are public, and
+name it. The Safe itself can replace the name at any time with `rename`:
+`msg.sender` must be the Safe, so the call is the Safe's own transaction,
+approved by its owners. `renamedAt` (a block number, 0 if never) tells a
+reader which it is: 0 means the first writer's name, anything else the Safe's
+own. A rename changes nothing but the name; it needs the Safe deployed on that
+chain, and names are per chain.
 
 A page of 100 records with ~420-byte initializers costs about 5.7M gas to
 read (storage cold, as in an `eth_call`); a page's cost grows with its records' initializers, so a reader keeps
@@ -169,7 +179,7 @@ an address no Safe lives at.
      receive on that chain.
 
 Gas, with this repo's fixtures (3-owner setup, ~420-byte initializer): about
-433k for the first write, 35k for a repeat; a full 8 KiB initializer about 7M. Storage dominates; it is cheap on
+37k for a rename, 433k for the first write, 35k for a repeat; a full 8 KiB initializer about 7M. Storage dominates; it is cheap on
 rollups and noticeable on Ethereum mainnet.
 
 ## Deployment
@@ -178,8 +188,8 @@ One contract, no constructor arguments, deployed through the deterministic
 CREATE2 deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with a fixed
 salt, so it has the same address on every chain. Compiler settings are pinned
 in `foundry.toml` (solc 0.8.28, optimizer 200, `paris`, no metadata hash), so
-the address depends on code alone, not comments: v3 (a required name, records enumerable in
-write order, `genesisPage`) is `0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E`.
+the address depends on code alone, not comments: v4 (a Safe renames itself,
+`rename`) is `0xF412388bF908E510066d3Be5c704bd9A327f945d`. It is not deployed yet.
 
 ```shell
 cd contracts
@@ -190,7 +200,7 @@ forge script script/Deploy.s.sol --rpc-url $RPC --broadcast --account deployer
 Anyone can deploy it on a new chain and gets the same contract at the same
 address.
 
-v3 deployments:
+v3 (a required name, records enumerable in write order; no rename, retired):
 
 | Network | Address | Deployment |
 | --- | --- | --- |

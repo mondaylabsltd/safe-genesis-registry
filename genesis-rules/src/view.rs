@@ -37,6 +37,7 @@ pub fn genesis(safe: Address, l: &Lookup) -> (u16, Value) {
             "recorder": r.recorder,
             "recordedAt": r.recorded_at,
             "index": r.index,
+            "renamedAt": r.renamed_at,
             "setup": setup,
             "setupDefects": setup.as_ref().map(|s| s.defects(safe, version)),
             "deployCall": {"to": r.genesis.factory, "data": r.genesis.deploy_call()},

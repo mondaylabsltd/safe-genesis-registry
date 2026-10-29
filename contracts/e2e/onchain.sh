@@ -8,7 +8,7 @@
 #
 # With PRIVATE_KEY, it also writes: a real Safe v1.4.1 genesis under a name
 # "E2E check <time>", a repeat write, a mined revert, then deploys the Safe
-# from deployCallOf and inspects it. Records are permanent: each run adds one
+# from deployCallOf, inspects it, and has it rename itself (execTransaction). Records are permanent: each run adds one
 # record to the registry's public list, and one Safe to the chain.
 #
 #   RPC=https://rpc.testnet.arc.network contracts/e2e/onchain.sh
@@ -20,13 +20,13 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 : "${RPC:?set RPC}"
-R=${REGISTRY:-0x535fE27b2b52EfbEFFfE2409890C2A00e7FF801E}
+R=${REGISTRY:-0xF412388bF908E510066d3Be5c704bd9A327f945d}
 FACT=0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67   # SafeProxyFactory 1.4.1
 SING=0x29fcB43b46531BcA003ddC8FCB67FFE91900C762   # SafeL2 1.4.1
 FH=0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99     # CompatibilityFallbackHandler 1.4.1
 Z=0x0000000000000000000000000000000000000000
 FALLBACK_HANDLER_SLOT=0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5
-GT='(address,address,uint256,bytes,bytes32,address,uint64,uint32,string)'
+GT='(address,address,uint64,uint256,bytes,bytes32,address,uint64,uint32,string)'
 SIG_RECORD='record(address,bytes,address,bytes,uint256,string)'
 
 PASS=0; FAIL=0
@@ -41,14 +41,14 @@ revert_data() {
 }
 total() { cast call $R 'totalRecords()(uint256)' --rpc-url "$RPC" | awk '{print $1}'; }
 genesis_json() { cast call $R "genesisOf(address)(bool,$GT)" "$1" --rpc-url "$RPC" --json; }
-field() { genesis_json "$1" | jq -r ".[1][$2]"; } # 0 factory .. 7 index, 8 name
+field() { genesis_json "$1" | jq -r ".[1][$2]"; } # 0 factory, 1 singleton, 2 renamedAt, 3 saltNonce, 4 initializer, 5 code hash, 6 recorder, 7 recordedAt, 8 index, 9 name
 
 echo "== chain $(cast chain-id --rpc-url "$RPC"), registry $R"
 forge build -q
 
 echo "== 1. the deployed code"
 eq "runtime code == this build" "$(cast code $R --rpc-url "$RPC")" "$(forge inspect SafeGenesisRegistry deployedBytecode)"
-eq "VERSION" "$(cast call $R 'VERSION()(uint8)' --rpc-url "$RPC")" 3
+eq "VERSION" "$(cast call $R 'VERSION()(uint8)' --rpc-url "$RPC")" "$(grep -oE 'VERSION = [0-9]+' src/SafeGenesisRegistry.sol | grep -oE '[0-9]+')"
 for a in $FACT $SING $FH; do [ "$(cast code $a --rpc-url "$RPC")" != 0x ] && ok "Safe 1.4.1 contract at $a" || bad "no code at $a"; done
 
 echo "== 2. refusals (eth_call, nothing written)"
@@ -56,6 +56,14 @@ CODE=$(cast call $FACT 'proxyCreationCode()(bytes)' --rpc-url "$RPC")
 INIT=$(cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' \
   "[0x1111111111111111111111111111111111111111]" 1 $Z 0x $FH $Z 0 $Z)
 rec() { cast calldata "$SIG_RECORD" "$@"; }
+# A Safe's own call: execTransaction by an owner of a 1-threshold Safe, with
+# the owner's pre-validated signature (r = owner, s = 0, v = 1).
+safe_exec() { # rpc safe to data key
+  local owner sig; owner=$(cast wallet address "$5")
+  sig=0x$(cast abi-encode 'f(address,uint256)' $owner 0 | cut -c3-)01
+  cast send "$2" 'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)' \
+    "$3" 0 "$4" 0 0 0 0 $Z $Z $sig --private-key "$5" --rpc-url "$1" --json
+}
 eq "empty name -> EmptyName"               "$(revert_data "$(rec $FACT $CODE $SING $INIT 1 "")")"                          "$(err 'EmptyName()')"
 eq "65-byte name -> NameTooLong(65)"       "$(revert_data "$(rec $FACT $CODE $SING $INIT 1 "$(printf 'x%.0s' $(seq 65))")")" "$(err 'NameTooLong(uint256)' 65)"
 eq "zero factory -> ZeroAddress"           "$(revert_data "$(rec $Z $CODE $SING $INIT 1 n)")"                              "$(err 'ZeroAddress()')"
@@ -74,7 +82,7 @@ check_registry() { # every record's index, safeAt, and pages agree (up to 200 re
   local upto=$(( n < 200 ? n : 200 )) bad_index=0 walk=""
   for ((i=0; i<upto; i++)); do
     local s; s=$(cast call $R 'safeAt(uint256)(address)' $i --rpc-url "$RPC")
-    [ "$(field $s 7)" == "$i" ] || { bad_index=$((bad_index+1)); echo "    index $i: record says $(field $s 7)"; }
+    [ "$(field $s 8)" == "$i" ] || { bad_index=$((bad_index+1)); echo "    index $i: record says $(field $s 8)"; }
     walk="$s, $walk"
   done
   eq "genesisOf(safeAt(i)).index == i for $upto records" "$bad_index" 0
@@ -94,12 +102,13 @@ echo "== 3. the records already there"
 check_registry
 
 if [ -z "${PRIVATE_KEY:-}" ]; then
-  echo "== 4-6. (skipped: set PRIVATE_KEY to write and replay)"
+  echo "== 4-8. (skipped: set PRIVATE_KEY to write, replay and rename)"
 else
   ME=$(cast wallet address "$PRIVATE_KEY")
   echo "== 4. write a real Safe v1.4.1 genesis, from $ME (balance $(cast balance $ME --ether --rpc-url "$RPC"))"
   O1=0x1111111111111111111111111111111111111111; O2=0x2222222222222222222222222222222222222222
-  INIT=$(cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "[$ME,$O1,$O2]" 2 $Z 0x $FH $Z 0 $Z)
+  # threshold 1, so this key alone can make the Safe act (the rename below)
+  INIT=$(cast calldata 'setup(address[],uint256,address,bytes,address,address,uint256,address)' "[$ME,$O1,$O2]" 1 $Z 0x $FH $Z 0 $Z)
   STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   NONCE=$(cast keccak "safe-genesis-registry/e2e/$ME/$STAMP")
   NAME="E2E check $STAMP"
@@ -117,12 +126,13 @@ else
   eq "log data" "$(echo "$RCPT" | jq -r '.logs[0].data')" "$(cast abi-encode 'f(uint256,bytes32,bytes,string)' $NONCE $(cast keccak $CODE) $INIT "$NAME")"
   eq "genesisOf: factory"    "$(field $SAFE 0)" "$FACT"
   eq "genesisOf: singleton"  "$(field $SAFE 1)" "$SING"
-  eq "genesisOf: initializer" "$(field $SAFE 3)" "$INIT"
-  eq "genesisOf: code hash"  "$(field $SAFE 4)" "$(cast keccak $CODE)"
-  eq "genesisOf: recorder"   "$(field $SAFE 5)" "$ME"
-  eq "genesisOf: recordedAt" "$(field $SAFE 6)" "$BLOCK"
-  eq "genesisOf: name"       "$(field $SAFE 8)" "$NAME"
-  IDX=$(field $SAFE 7)
+  eq "genesisOf: initializer" "$(field $SAFE 4)" "$INIT"
+  eq "genesisOf: code hash"  "$(field $SAFE 5)" "$(cast keccak $CODE)"
+  eq "genesisOf: recorder"   "$(field $SAFE 6)" "$ME"
+  eq "genesisOf: recordedAt" "$(field $SAFE 7)" "$BLOCK"
+  eq "genesisOf: name"       "$(field $SAFE 9)"
+  eq "genesisOf: renamedAt"  "$(field $SAFE 2)" 0 "$NAME"
+  IDX=$(field $SAFE 8)
   [ "$IDX" -ge "$BEFORE" ] && ok "index $IDX follows the $BEFORE records before it" || bad "index $IDX < $BEFORE"
   eq "safeAt(index)" "$(cast call $R 'safeAt(uint256)(address)' $IDX --rpc-url "$RPC")" "$SAFE"
   NOW=$(total)
@@ -133,8 +143,8 @@ else
   RCPT2=$(cast send $R "$SIG_RECORD" $FACT $CODE $SING $INIT $NONCE "Another name" --private-key "$PRIVATE_KEY" --rpc-url "$RPC" --json)
   eq "repeat: tx ok" "$(echo "$RCPT2" | jq -r .status)" 0x1
   eq "repeat: no log" "$(echo "$RCPT2" | jq '.logs | length')" 0
-  eq "repeat: name kept" "$(field $SAFE 8)" "$NAME"
-  eq "repeat: index kept" "$(field $SAFE 7)" "$IDX"
+  eq "repeat: name kept" "$(field $SAFE 9)" "$NAME"
+  eq "repeat: index kept" "$(field $SAFE 8)" "$IDX"
   NONCE2=$(cast keccak "reverted:$NONCE")
   FAILED=$(cast send $R "$SIG_RECORD" $FACT $CODE $SING $INIT $NONCE2 "" --gas-limit 300000 --private-key "$PRIVATE_KEY" --rpc-url "$RPC" --json 2>/dev/null)
   eq "mined revert: status 0" "$(echo "$FAILED" | jq -r .status)" 0x0
@@ -150,11 +160,24 @@ else
   eq "deploy status" "$(echo "$DEPLOY" | jq -r .status)" 0x1
   eq "Safe VERSION"   "$(cast call $SAFE 'VERSION()(string)' --rpc-url "$RPC")" '"1.4.1"'
   eq "Safe owners"    "$(cast call $SAFE 'getOwners()(address[])' --rpc-url "$RPC")" "[$ME, $O1, $O2]"
-  eq "Safe threshold" "$(cast call $SAFE 'getThreshold()(uint256)' --rpc-url "$RPC")" 2
+  eq "Safe threshold" "$(cast call $SAFE 'getThreshold()(uint256)' --rpc-url "$RPC")" 1
   eq "Safe fallback handler" "$(cast storage $SAFE $FALLBACK_HANDLER_SLOT --rpc-url "$RPC")" "$(cast abi-encode 'f(address)' $FH)"
   eq "Safe singleton" "$(cast storage $SAFE 0 --rpc-url "$RPC")" "$(cast abi-encode 'f(address)' $SING)"
 
-  echo "== 7. the registry after the writes"
+  echo "== 7. rename: the Safe renames itself through execTransaction"
+  RENAME_TO="Renamed by the Safe $STAMP"
+  eq "the key's own address: NotRecorded" "$(cast rpc eth_call "{\"from\":\"$ME\",\"to\":\"$R\",\"data\":\"$(cast calldata 'rename(string)' x)\"}" latest --rpc-url "$RPC" 2>&1 | grep -oE '0x[0-9a-f]{8}([0-9a-f]{64})*' | tail -1)" "$(err 'NotRecorded(address)' $ME)"
+  RX=$(safe_exec "$RPC" $SAFE $R "$(cast calldata 'rename(string)' "$RENAME_TO")" "$PRIVATE_KEY")
+  echo "  rename tx $(echo "$RX" | jq -r .transactionHash)"
+  eq "execTransaction status" "$(echo "$RX" | jq -r .status)" 0x1
+  eq "GenesisRenamed from the registry" "$(echo "$RX" | jq -r --arg r "$(echo $R | tr A-F a-f)" '[.logs[] | select(.address == $r)][0].topics | join(" ")')" "$(cast keccak 'GenesisRenamed(address,string)') $(cast abi-encode 'f(address)' $SAFE)"
+  eq "name is the Safe's" "$(field $SAFE 9)" "$RENAME_TO"
+  eq "renamedAt = the rename's block" "$(field $SAFE 2)" "$(cast to-dec "$(echo "$RX" | jq -r .blockNumber)")"
+  eq "index unchanged" "$(field $SAFE 8)" "$IDX"
+  eq "recorder unchanged" "$(field $SAFE 6)" "$ME"
+  eq "initializer unchanged" "$(field $SAFE 4)" "$INIT"
+
+  echo "== 8. the registry after the writes"
   check_registry
 fi
 

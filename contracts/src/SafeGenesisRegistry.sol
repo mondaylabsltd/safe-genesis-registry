@@ -54,15 +54,19 @@ pragma solidity 0.8.28;
 ///         - `totalRecords`, `isRecorded` and the enumeration (`safeAt`,
 ///           `genesisPage`) cover any record, including ones filed at
 ///           addresses no Safe lives at.
-///         - Every record has a NAME: a label written with the genesis and
-///           never changed. It is not an input to the address and proves
-///           nothing: names may repeat, whoever writes the record first
-///           chooses it. The address is the Safe's identity.
+///         - Every record has a NAME: a label, not an input to the address.
+///           Whoever writes the record first chooses it, so on its own it
+///           proves nothing, and names may repeat. The Safe itself can
+///           replace it at any time (`rename`, called by the Safe, so by its
+///           owners' transaction), on a chain where it is deployed; a record
+///           whose `renamedAt` is not zero carries a name the Safe chose. A
+///           rename moves the label only: the genesis never changes. Names
+///           are per chain. The address is the Safe's identity.
 ///         - The registry makes no external call.
 ///         - EVM CREATE2 only: chains that derive CREATE2 addresses
 ///           differently (zkSync Era) are out of scope.
 contract SafeGenesisRegistry {
-    uint8 public constant VERSION = 3;
+    uint8 public constant VERSION = 4;
 
     /// Upper bound on a stored initializer. A Safe `setup` with dozens of
     /// owners fits in a few KiB. The bound keeps a record writable in one
@@ -81,6 +85,10 @@ contract SafeGenesisRegistry {
         address factory;
         /// The Safe singleton (mastercopy) the proxy delegates to.
         address singleton;
+        /// Block number of the Safe's last `rename`, 0 if it never renamed
+        /// itself: then `name` is the first writer's. Shares the storage slot
+        /// of `singleton`.
+        uint64 renamedAt;
         /// The factory's salt nonce.
         uint256 saltNonce;
         /// The `setup(...)` call the factory makes on the new proxy: the
@@ -96,8 +104,8 @@ contract SafeGenesisRegistry {
         /// Position in write order, from 0: `safeAt(index)` is this Safe.
         /// Shares the storage slot of `recorder` and `recordedAt`.
         uint32 index;
-        /// The name written with the record, 1 to 64 bytes. A label: not part
-        /// of the address, never changed, not unique.
+        /// The name, 1 to 64 bytes: the first writer's, or the Safe's own
+        /// after a `rename`. A label: not part of the address, not unique.
         string name;
     }
 
@@ -116,6 +124,8 @@ contract SafeGenesisRegistry {
         string name
     );
 
+    event GenesisRenamed(address indexed safe, string name);
+
     error ZeroAddress();
     error EmptyName();
     error NameTooLong(uint256 length);
@@ -124,6 +134,7 @@ contract SafeGenesisRegistry {
     error InitializerTooLong(uint256 length);
     error IndexOutOfBounds(uint256 index, uint256 total);
     error RegistryFull();
+    error NotRecorded(address safe);
 
     // -----------------------------------------------------------------------
     // Write
@@ -152,6 +163,21 @@ contract SafeGenesisRegistry {
         _store(safe, factory, singleton, saltNonce, keccak256(proxyCreationCode));
         _storeBytes(safe, initializer, name);
         return (safe, true);
+    }
+
+    /// Rename the calling Safe: `msg.sender` is the Safe, so the call comes
+    /// from its own transaction, approved by its owners. Only the name and
+    /// `renamedAt` change; a Safe may rename itself any number of times.
+    /// On a chain where the Safe is not deployed nothing can make this call.
+    function rename(string calldata name) external {
+        Genesis storage g = _genesis[msg.sender];
+        if (g.factory == address(0)) revert NotRecorded(msg.sender);
+        uint256 length = bytes(name).length;
+        if (length == 0) revert EmptyName();
+        if (length > MAX_NAME_LENGTH) revert NameTooLong(length);
+        g.name = name;
+        g.renamedAt = uint64(block.number);
+        emit GenesisRenamed(msg.sender, name);
     }
 
     // -----------------------------------------------------------------------

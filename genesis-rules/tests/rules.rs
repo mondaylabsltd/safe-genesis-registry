@@ -60,6 +60,7 @@ fn genesis_of_response_round_trips() {
     let abi = ISafeGenesisRegistry::Genesis {
         factory: g.factory,
         singleton: g.singleton,
+        renamedAt: 0,
         saltNonce: g.salt_nonce,
         initializer: g.initializer.clone(),
         proxyCreationCodeHash: keccak256(proxy_code()),
@@ -73,6 +74,10 @@ fn genesis_of_response_round_trips() {
     assert_eq!(rec.genesis, g);
     assert_eq!(rec.recorded_at, 42);
     assert_eq!(rec.index, 7);
+    assert_eq!(rec.renamed_at, 0);
+    let renamed = ISafeGenesisRegistry::Genesis { renamedAt: 99, name: "Renamed".into(), ..abi.clone() };
+    let rec = genesis::decode_genesis_of(&(true, renamed).abi_encode_params()).unwrap().unwrap();
+    assert_eq!((rec.renamed_at, rec.genesis.name.as_deref()), (99, Some("Renamed")));
     let safe = g.address(&proxy_code());
     assert!(rec.belongs_to(safe, &proxy_code()));
     assert!(!rec.belongs_to(safe, b"other code"));
@@ -81,6 +86,7 @@ fn genesis_of_response_round_trips() {
     let blank = ISafeGenesisRegistry::Genesis {
         factory: Address::ZERO,
         singleton: Address::ZERO,
+        renamedAt: 0,
         saltNonce: U256::ZERO,
         initializer: Bytes::new(),
         proxyCreationCodeHash: B256::ZERO,
@@ -521,6 +527,7 @@ fn a_named_record_round_trips_and_records_by_name() {
     let abi = ISafeGenesisRegistry::Genesis {
         factory: g.factory,
         singleton: g.singleton,
+        renamedAt: 0,
         saltNonce: g.salt_nonce,
         initializer: g.initializer.clone(),
         proxyCreationCodeHash: keccak256(proxy_code()),

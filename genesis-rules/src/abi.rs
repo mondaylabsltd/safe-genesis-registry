@@ -7,6 +7,7 @@ alloy::sol! {
         struct Genesis {
             address factory;
             address singleton;
+            uint64 renamedAt;
             uint256 saltNonce;
             bytes initializer;
             bytes32 proxyCreationCodeHash;
@@ -34,6 +35,8 @@ alloy::sol! {
             uint256 saltNonce,
             string name
         ) external returns (address safe, bool created);
+        event GenesisRenamed(address indexed safe, string name);
+        function rename(string name) external;
         function genesisOf(address safe) external view returns (bool found, Genesis genesis);
         function isRecorded(address safe) external view returns (bool);
         function deployCallOf(address safe) external view returns (address factory, bytes data);
